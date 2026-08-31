@@ -66,6 +66,8 @@ Restart existing Neovim processes after changing the plugin or mappings.
 
 ## Default mappings
 
+For a compact one-page reference covering Pi context, direct edits, Copilot, and the system clipboard, see [CHEATSHEET.md](CHEATSHEET.md).
+
 The mappings assume Space is already configured as `<leader>`.
 
 ### Context

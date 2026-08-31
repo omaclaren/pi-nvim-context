@@ -1,0 +1,41 @@
+{
+  "name": "pi-nvim-context",
+  "version": "0.1.0",
+  "description": "Gather Neovim file, selection, buffer, and diagnostic context into a standalone Pi prompt without submitting it",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "neovim",
+    "editor-context"
+  ],
+  "files": [
+    "index.ts",
+    "lua",
+    "plugin",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "scripts": {
+    "test": "npm run test:extension && npm run test:nvim",
+    "test:extension": "node --import tsx --test tests/extension.test.ts",
+    "test:nvim": "nvim --headless -u NONE -l tests/nvim_test.lua",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.84.4",
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.2"
+  }
+}

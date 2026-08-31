@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import * as net from "node:net";
 import { join } from "node:path";
 import test from "node:test";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import piNvimContext, { PROTOCOL_VERSION } from "../index.js";
+import type { CompletionRunner } from "../completion.js";
+import { PROTOCOL_VERSION, registerPiNvimContext } from "../index.js";
 
 type Handler = (...args: unknown[]) => unknown;
 
-function createMockPi(sessionName = "Bridge test") {
+function createMockPi(sessionName = "Bridge test", complete?: CompletionRunner) {
 	const handlers = new Map<string, Handler[]>();
 	const commands = new Map<string, unknown>();
 	const pi = {
@@ -22,7 +24,7 @@ function createMockPi(sessionName = "Bridge test") {
 			return sessionName;
 		},
 	};
-	piNvimContext(pi as unknown as ExtensionAPI);
+	registerPiNvimContext(pi as unknown as ExtensionAPI, { complete });
 	return { handlers, commands };
 }
 
@@ -56,12 +58,23 @@ function request(socketPath: string, payload: unknown): Promise<Record<string, u
 
 function createContext(mode: ExtensionContext["mode"] = "tui") {
 	let editorText = "";
+	let idle = true;
 	const pastes: string[] = [];
 	const notifications: Array<{ message: string; type?: string }> = [];
 	const context = {
 		mode,
 		hasUI: mode === "tui" || mode === "rpc",
 		cwd: "/tmp/pi-nvim-context-project",
+		model: {
+			provider: "openai-codex",
+			id: "test-suggestion-model",
+			name: "Test suggestion model",
+			reasoning: true,
+		},
+		modelRegistry: {
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
+		},
+		isIdle: () => idle,
 		ui: {
 			getEditorText: () => editorText,
 			pasteToEditor: (text: string) => {
@@ -80,6 +93,9 @@ function createContext(mode: ExtensionContext["mode"] = "tui") {
 		pastes,
 		notifications,
 		getEditorText: () => editorText,
+		setIdle: (value: boolean) => {
+			idle = value;
+		},
 	};
 }
 
@@ -90,7 +106,31 @@ test("Pi bridge exposes a private socket and prefills without submitting", async
 	process.env.PI_NVIM_CONTEXT_RUNTIME_DIR = runtimeDirectory;
 
 	try {
-		const { handlers, commands } = createMockPi();
+		const completionCalls: Array<{ prompt: string; options: Record<string, unknown> }> = [];
+		let cancelledModelCall = false;
+		const complete = (async (_model: unknown, modelContext: { messages?: Array<{ content?: Array<{ text?: string }> }> }, options: Record<string, unknown>) => {
+			const prompt = modelContext.messages?.[0]?.content?.[0]?.text ?? "";
+			completionCalls.push({ prompt, options });
+			if (prompt.includes("CANCEL_ME")) {
+				await new Promise<never>((_resolve, reject) => {
+					const signal = options.signal as AbortSignal;
+					signal.addEventListener("abort", () => {
+						cancelledModelCall = true;
+						reject(new Error("cancelled by test client"));
+					}, { once: true });
+				});
+			}
+			return {
+				role: "assistant",
+				content: [{
+					type: "text",
+					text: prompt.includes("<edit_instruction>") ? "A clearer replacement." : " natural continuation",
+				}],
+				stopReason: "stop",
+				timestamp: Date.now(),
+			};
+		}) as unknown as CompletionRunner;
+		const { handlers, commands } = createMockPi("Bridge test", complete);
 		const mock = createContext();
 		assert.ok(commands.has("nvim-context"));
 
@@ -116,12 +156,14 @@ test("Pi bridge exposes a private socket and prefills without submitting", async
 		const manifestPath = join(runtimeDirectory, manifestName);
 		const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
 			protocol: number;
+			capabilities: string[];
 			socketPath: string;
 			cwd: string;
 			sessionName: string;
 		};
 
 		assert.equal(manifest.protocol, PROTOCOL_VERSION);
+		assert.deepEqual(manifest.capabilities, ["prefill", "suggest"]);
 		assert.equal(manifest.cwd, mock.context.cwd);
 		assert.equal(manifest.sessionName, "Bridge test");
 		assert.equal((await stat(runtimeDirectory)).mode & 0o777, 0o700);
@@ -134,6 +176,77 @@ test("Pi bridge exposes a private socket and prefills without submitting", async
 		});
 		assert.equal(ping.ok, true);
 		assert.equal(ping.type, "ping");
+
+		const completion = await request(manifest.socketPath, {
+			protocol: PROTOCOL_VERSION,
+			type: "suggest",
+			requestId: "completion-1",
+			kind: "completion",
+			prefix: "A sentence that needs",
+			selection: "",
+			suffix: ".",
+			language: "markdown",
+			label: "notes.md",
+		});
+		assert.equal(completion.ok, true);
+		assert.equal(completion.type, "suggestion");
+		assert.equal(completion.suggestion, " natural continuation");
+		assert.equal(completion.modelLabel, "openai-codex/test-suggestion-model");
+		assert.equal(completion.thinking, "off");
+		assert.equal("reasoning" in completionCalls[0].options, false, "cursor completions keep thinking off");
+		assert.match(completionCalls[0].prompt, /A sentence that needs⟦CURSOR⟧\./);
+		assert.deepEqual(mock.pastes, [], "direct suggestions do not alter Pi's input editor");
+
+		const rewrite = await request(manifest.socketPath, {
+			protocol: PROTOCOL_VERSION,
+			type: "suggest",
+			requestId: "rewrite-1",
+			kind: "rewrite",
+			prefix: "Before. ",
+			selection: "An awkward sentence.",
+			suffix: " After.",
+			instruction: "Make this clearer.",
+			language: "markdown",
+			label: "notes.md",
+		});
+		assert.equal(rewrite.ok, true);
+		assert.equal(rewrite.suggestion, "A clearer replacement.");
+		assert.equal(rewrite.thinking, "low");
+		assert.equal(completionCalls[1].options.reasoning, "low");
+		assert.match(completionCalls[1].prompt, /<edit_instruction>\nMake this clearer\./);
+		assert.deepEqual(mock.pastes, [], "rewrites do not alter Pi's input editor");
+
+		mock.setIdle(false);
+		const busy = await request(manifest.socketPath, {
+			protocol: PROTOCOL_VERSION,
+			type: "suggest",
+			requestId: "busy-1",
+			kind: "completion",
+			prefix: "Busy",
+			selection: "",
+			suffix: "",
+		});
+		assert.equal(busy.ok, false);
+		assert.match(String(busy.error), /Pi is busy/);
+		mock.setIdle(true);
+
+		const cancellingSocket = net.createConnection(manifest.socketPath);
+		await once(cancellingSocket, "connect");
+		cancellingSocket.write(`${JSON.stringify({
+			protocol: PROTOCOL_VERSION,
+			type: "suggest",
+			requestId: "cancel-1",
+			kind: "completion",
+			prefix: "CANCEL_ME",
+			selection: "",
+			suffix: "",
+		})}\n`);
+		await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));
+		cancellingSocket.destroy();
+		for (let attempt = 0; attempt < 50 && !cancelledModelCall; attempt += 1) {
+			await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+		}
+		assert.equal(cancelledModelCall, true, "closing the Neovim socket aborts its model call");
 
 		const first = await request(manifest.socketPath, {
 			protocol: PROTOCOL_VERSION,

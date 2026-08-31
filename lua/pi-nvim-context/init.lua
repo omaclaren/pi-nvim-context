@@ -1,5 +1,6 @@
 local M = {}
 
+local suggestion = require("pi-nvim-context.suggest")
 local uv = vim.uv or vim.loop
 local PROTOCOL_VERSION = 1
 local MAX_PREFILL_BYTES = 256 * 1024
@@ -11,6 +12,14 @@ local defaults = {
   max_selection_bytes = 100 * 1024,
   max_buffer_bytes = 200 * 1024,
   max_diagnostics = 50,
+  suggest_timeout_ms = 70 * 1000,
+  rewrite_timeout_ms = 130 * 1000,
+  suggest_prefix_chars = 12 * 1000,
+  suggest_suffix_chars = 6 * 1000,
+  max_rewrite_bytes = 100 * 1024,
+  max_preview_lines = 12,
+  rewrite_preview_width = 92,
+  rewrite_preview_height = 18,
   keymaps = {
     pick = "<leader>pp",
     file = "<leader>pf",
@@ -19,6 +28,11 @@ local defaults = {
     diagnostics = "<leader>pd",
     buffer = "<leader>pb",
     status = "<leader>pi",
+    suggest = "<leader>pc",
+    rewrite = "<leader>pr",
+    accept = "<leader>pa",
+    again = "<leader>pn",
+    dismiss = "<leader>px",
   },
 }
 
@@ -102,10 +116,13 @@ local function socket_request(socket_path, payload, callback, timeout_ms)
   end
 
   timer:start(timeout_ms or config.timeout_ms, 0, function()
-    finish("Timed out connecting to Pi")
+    finish("Timed out waiting for Pi")
   end)
 
   pipe:connect(socket_path, function(connect_err)
+    if finished then
+      return
+    end
     if connect_err then
       finish("Could not connect to Pi: " .. tostring(connect_err))
       return
@@ -149,11 +166,18 @@ local function socket_request(socket_path, payload, callback, timeout_ms)
 
     local encoded = vim.json.encode(payload) .. "\n"
     pipe:write(encoded, function(write_err)
+      if finished then
+        return
+      end
       if write_err then
         finish("Could not write to Pi: " .. tostring(write_err))
       end
     end)
   end)
+
+  return function()
+    finish("Request cancelled")
+  end
 end
 
 local function read_manifest(path)
@@ -259,9 +283,16 @@ local function session_label(session)
   return string.format("%s — %s (PID %s)", name, cwd, tostring(session.pid or "?"))
 end
 
-local function select_from(sessions, callback)
+local function session_has_capability(session, capability)
+  if not capability then
+    return true
+  end
+  return type(session.capabilities) == "table" and vim.tbl_contains(session.capabilities, capability)
+end
+
+local function select_from(sessions, callback, prompt)
   vim.ui.select(sessions, {
-    prompt = "Send Neovim context to which Pi session?",
+    prompt = prompt or "Send Neovim context to which Pi session?",
     format_item = session_label,
   }, function(choice)
     if choice then
@@ -273,11 +304,18 @@ local function select_from(sessions, callback)
   end)
 end
 
-local function choose_session(force_picker, callback)
+local function choose_session(force_picker, callback, capability)
   ping_sessions(scan_sessions(), function(sessions)
+    if capability then
+      sessions = vim.tbl_filter(function(session)
+        return session_has_capability(session, capability)
+      end, sessions)
+    end
     if #sessions == 0 then
       notify(
-        "No running Pi context bridge found. Restart Pi after installing pi-nvim-context.",
+        capability == "suggest"
+            and "No running Pi suggestion bridge found. Restart Pi after updating pi-nvim-context."
+          or "No running Pi context bridge found. Restart Pi after installing pi-nvim-context.",
         vim.log.levels.WARN
       )
       callback(nil)
@@ -306,8 +344,27 @@ local function choose_session(force_picker, callback)
       return
     end
 
-    select_from(sessions, callback)
+    select_from(
+      sessions,
+      callback,
+      capability == "suggest" and "Use which Pi session for this editor suggestion?" or nil
+    )
   end)
+end
+
+local function choose_suggestion_session(callback)
+  if selected_session and session_has_capability(selected_session, "suggest") then
+    callback(selected_session)
+    return
+  end
+  selected_session = nil
+  choose_session(false, callback, "suggest")
+end
+
+local function invalidate_session(session)
+  if selected_session and session and selected_session.socketPath == session.socketPath then
+    selected_session = nil
+  end
 end
 
 local function truncate_utf8(text, max_bytes)
@@ -707,6 +764,12 @@ function M.add_buffer()
   with_selected_formatter(format_buffer, "current buffer")
 end
 
+M.suggest = suggestion.suggest
+M.rewrite = suggestion.rewrite
+M.accept_suggestion = suggestion.accept
+M.suggest_again = suggestion.again
+M.dismiss_suggestion = suggestion.dismiss
+
 function M.status()
   local sessions = scan_sessions()
   if selected_session then
@@ -735,6 +798,11 @@ local command_definitions = {
   PiContextDiagnostics = { M.add_diagnostics, "Add current diagnostics to Pi's input" },
   PiContextBuffer = { M.add_buffer, "Add the current buffer to Pi's input" },
   PiContextStatus = { M.status, "Show Pi context bridge status" },
+  PiSuggest = { M.suggest, "Ask Pi for an explicit completion at the cursor" },
+  PiRewrite = { M.rewrite, "Ask Pi to rewrite the visual selection" },
+  PiSuggestAccept = { M.accept_suggestion, "Accept the pending Pi editor suggestion" },
+  PiSuggestAgain = { M.suggest_again, "Generate another Pi editor suggestion" },
+  PiSuggestDismiss = { M.dismiss_suggestion, "Cancel or dismiss the Pi editor suggestion" },
 }
 
 local function register_commands()
@@ -742,7 +810,7 @@ local function register_commands()
     vim.api.nvim_create_user_command(name, definition[1], {
       desc = definition[2],
       force = true,
-      range = name == "PiContextSelection",
+      range = name == "PiContextSelection" or name == "PiRewrite",
     })
   end
 end
@@ -759,6 +827,10 @@ local function register_keymaps()
     diagnostics = { M.add_diagnostics, "Add diagnostics to Pi" },
     buffer = { M.add_buffer, "Add current buffer to Pi" },
     status = { M.status, "Show Pi context status" },
+    suggest = { M.suggest, "Request Pi completion at cursor" },
+    accept = { M.accept_suggestion, "Accept Pi editor suggestion" },
+    again = { M.suggest_again, "Try another Pi editor suggestion" },
+    dismiss = { M.dismiss_suggestion, "Dismiss Pi editor suggestion" },
   }
   for name, mapping in pairs(normal) do
     local lhs = keymaps[name]
@@ -769,10 +841,24 @@ local function register_keymaps()
   if keymaps.selection and keymaps.selection ~= false then
     vim.keymap.set("x", keymaps.selection, M.add_selection, { silent = true, desc = "Add selection to Pi" })
   end
+  if keymaps.rewrite and keymaps.rewrite ~= false then
+    vim.keymap.set("x", keymaps.rewrite, M.rewrite, { silent = true, desc = "Rewrite selection with Pi" })
+  end
 end
 
 function M.setup(options)
   config = vim.tbl_deep_extend("force", vim.deepcopy(defaults), options or {})
+  suggestion.configure({
+    protocol = PROTOCOL_VERSION,
+    get_config = function()
+      return config
+    end,
+    notify = notify,
+    socket_request = socket_request,
+    choose_suggestion_session = choose_suggestion_session,
+    invalidate_session = invalidate_session,
+    session_label = session_label,
+  })
   register_commands()
   register_keymaps()
 end
@@ -788,10 +874,12 @@ M._test = {
   format_selection = format_selection,
   format_diagnostics = format_diagnostics,
   format_buffer = format_buffer,
+  suggestion = suggestion._test,
   set_selected_session = function(session)
     selected_session = session
   end,
   reset = function()
+    suggestion._test.reset()
     config = vim.deepcopy(defaults)
     selected_session = nil
   end,

@@ -14,6 +14,15 @@ import { rmSync } from "node:fs";
 import * as net from "node:net";
 import { basename, dirname, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+	COMPLETION_TIMEOUT_MS,
+	MAX_SUGGESTION_INSTRUCTION_CHARS,
+	MAX_SUGGESTION_SELECTION_BYTES,
+	REWRITE_TIMEOUT_MS,
+	runEditorSuggestion,
+	type CompletionRunner,
+	type EditorSuggestionKind,
+} from "./completion.js";
 
 export const PROTOCOL_VERSION = 1;
 export const MAX_PREFILL_BYTES = 256 * 1024;
@@ -24,6 +33,7 @@ const RUNTIME_DIR_ENV = "PI_NVIM_CONTEXT_RUNTIME_DIR";
 
 interface BridgeManifest {
 	protocol: number;
+	capabilities: string[];
 	socketPath: string;
 	pid: number;
 	cwd: string;
@@ -34,11 +44,17 @@ interface BridgeManifest {
 	updatedAt: string;
 }
 
+interface ActiveSuggestion {
+	controller: AbortController;
+	socket: net.Socket;
+}
+
 interface BridgeRuntime {
 	active: boolean;
 	ctx: ExtensionContext;
 	server: net.Server;
 	connections: Set<net.Socket>;
+	activeSuggestions: Map<string, ActiveSuggestion>;
 	socketPath: string;
 	manifestPath: string;
 	startedAt: string;
@@ -50,6 +66,16 @@ interface RequestMessage {
 	type?: unknown;
 	text?: unknown;
 	summary?: unknown;
+	requestId?: unknown;
+	kind?: unknown;
+	prefix?: unknown;
+	selection?: unknown;
+	suffix?: unknown;
+	instruction?: unknown;
+	language?: unknown;
+	label?: unknown;
+	path?: unknown;
+	previousSuggestion?: unknown;
 }
 
 interface ResponseMessage {
@@ -57,6 +83,14 @@ interface ResponseMessage {
 	type?: string;
 	error?: string;
 	info?: BridgeManifest;
+	requestId?: string;
+	suggestion?: string;
+	modelLabel?: string;
+	thinking?: "off" | "low";
+}
+
+interface ExtensionDependencies {
+	complete?: CompletionRunner;
 }
 
 export function getRuntimeDirectory(): string {
@@ -145,6 +179,7 @@ function manifestFor(runtime: BridgeRuntime, pi: ExtensionAPI): BridgeManifest {
 	const sessionFile = runtime.ctx.sessionManager.getSessionFile();
 	return {
 		protocol: PROTOCOL_VERSION,
+		capabilities: ["prefill", "suggest"],
 		socketPath: runtime.socketPath,
 		pid: process.pid,
 		cwd: runtime.ctx.cwd,
@@ -191,12 +226,93 @@ function safeSummary(value: unknown): string {
 	return singleLine.length > 0 ? singleLine.slice(0, 120) : "editor context";
 }
 
-function handleRequest(
+function requestString(value: unknown, name: string, maxChars?: number): string {
+	if (typeof value !== "string") throw new Error(`${name} must be a string`);
+	if (maxChars !== undefined && value.length > maxChars) {
+		throw new Error(`${name} exceeds ${maxChars} characters`);
+	}
+	return value;
+}
+
+async function handleSuggestionRequest(
+	runtime: BridgeRuntime,
+	socket: net.Socket,
+	message: RequestMessage,
+	dependencies: ExtensionDependencies,
+): Promise<void> {
+	const requestId = requestString(message.requestId, "Suggestion request ID", 128);
+	if (!/^[A-Za-z0-9._:-]+$/.test(requestId)) throw new Error("Suggestion request ID is invalid");
+	const kind = message.kind;
+	if (kind !== "completion" && kind !== "rewrite") throw new Error("Suggestion kind must be completion or rewrite");
+	if (runtime.activeSuggestions.has(requestId)) throw new Error("Suggestion request ID is already active");
+	if (runtime.activeSuggestions.size >= 2) throw new Error("Too many Pi editor suggestions are already running");
+	if (!runtime.ctx.isIdle()) throw new Error("Pi is busy; wait for the current agent turn to finish");
+
+	const prefix = requestString(message.prefix, "Suggestion prefix");
+	const selection = message.selection === undefined ? "" : requestString(message.selection, "Suggestion selection");
+	const suffix = requestString(message.suffix, "Suggestion suffix");
+	const instruction = message.instruction === undefined
+		? undefined
+		: requestString(message.instruction, "Rewrite instruction", MAX_SUGGESTION_INSTRUCTION_CHARS);
+	if (Buffer.byteLength(selection, "utf8") > MAX_SUGGESTION_SELECTION_BYTES) {
+		throw new Error(`Suggestion selection exceeds ${MAX_SUGGESTION_SELECTION_BYTES} bytes`);
+	}
+
+	const controller = new AbortController();
+	const active: ActiveSuggestion = { controller, socket };
+	runtime.activeSuggestions.set(requestId, active);
+	socket.setTimeout((kind === "rewrite" ? REWRITE_TIMEOUT_MS : COMPLETION_TIMEOUT_MS) + 10_000);
+
+	try {
+		const result = await runEditorSuggestion(runtime.ctx, {
+			kind: kind as EditorSuggestionKind,
+			prefix,
+			selection,
+			suffix,
+			instruction,
+			language: message.language === undefined ? undefined : requestString(message.language, "Language", 100),
+			label: message.label === undefined ? undefined : requestString(message.label, "Buffer label", 2_000),
+			path: message.path === undefined ? undefined : requestString(message.path, "Buffer path", 4_000),
+			previousSuggestion: message.previousSuggestion === undefined
+				? undefined
+				: requestString(message.previousSuggestion, "Previous suggestion", 4_000),
+		}, {
+			signal: controller.signal,
+			complete: dependencies.complete,
+		});
+		if (!runtime.active || runtime.activeSuggestions.get(requestId) !== active || socket.destroyed) return;
+		runtime.activeSuggestions.delete(requestId);
+		response(socket, {
+			ok: true,
+			type: "suggestion",
+			requestId,
+			suggestion: result.suggestion,
+			modelLabel: result.modelLabel,
+			thinking: result.thinking,
+		});
+	} catch (error) {
+		if (!socket.destroyed) {
+			response(socket, {
+				ok: false,
+				type: "suggestion_error",
+				requestId,
+				error: controller.signal.aborted
+					? "Suggestion cancelled"
+					: error instanceof Error ? error.message : String(error),
+			});
+		}
+	} finally {
+		if (runtime.activeSuggestions.get(requestId) === active) runtime.activeSuggestions.delete(requestId);
+	}
+}
+
+async function handleRequest(
 	runtime: BridgeRuntime,
 	pi: ExtensionAPI,
 	socket: net.Socket,
 	message: RequestMessage,
-): void {
+	dependencies: ExtensionDependencies,
+): Promise<void> {
 	if (!runtime.active) {
 		response(socket, { ok: false, error: "Pi session is no longer active" });
 		return;
@@ -216,6 +332,11 @@ function handleRequest(
 			type: message.type,
 			info: manifestFor(runtime, pi),
 		});
+		return;
+	}
+
+	if (message.type === "suggest") {
+		await handleSuggestionRequest(runtime, socket, message, dependencies);
 		return;
 	}
 
@@ -251,7 +372,12 @@ function handleRequest(
 	}
 }
 
-function handleConnection(runtime: BridgeRuntime, pi: ExtensionAPI, socket: net.Socket): void {
+function handleConnection(
+	runtime: BridgeRuntime,
+	pi: ExtensionAPI,
+	socket: net.Socket,
+	dependencies: ExtensionDependencies,
+): void {
 	runtime.connections.add(socket);
 	socket.setEncoding("utf8");
 	socket.setTimeout(5000);
@@ -259,7 +385,12 @@ function handleConnection(runtime: BridgeRuntime, pi: ExtensionAPI, socket: net.
 	let buffer = "";
 	let handled = false;
 
-	const cleanup = () => runtime.connections.delete(socket);
+	const cleanup = () => {
+		runtime.connections.delete(socket);
+		for (const active of runtime.activeSuggestions.values()) {
+			if (active.socket === socket) active.controller.abort();
+		}
+	};
 	socket.on("close", cleanup);
 	socket.on("error", cleanup);
 	socket.on("timeout", () => socket.destroy());
@@ -282,14 +413,19 @@ function handleConnection(runtime: BridgeRuntime, pi: ExtensionAPI, socket: net.
 			return;
 		}
 
+		let message: RequestMessage;
 		try {
-			handleRequest(runtime, pi, socket, JSON.parse(line) as RequestMessage);
+			message = JSON.parse(line) as RequestMessage;
 		} catch (error) {
 			response(socket, {
 				ok: false,
 				error: `Invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
 			});
+			return;
 		}
+		void handleRequest(runtime, pi, socket, message, dependencies).catch((error) => {
+			response(socket, { ok: false, error: error instanceof Error ? error.message : String(error) });
+		});
 	});
 }
 
@@ -300,7 +436,7 @@ async function closeServer(server: net.Server): Promise<void> {
 	});
 }
 
-export default function piNvimContext(pi: ExtensionAPI): void {
+export function registerPiNvimContext(pi: ExtensionAPI, dependencies: ExtensionDependencies = {}): void {
 	let currentRuntime: BridgeRuntime | null = null;
 
 	const stopRuntime = async (): Promise<void> => {
@@ -309,6 +445,8 @@ export default function piNvimContext(pi: ExtensionAPI): void {
 		currentRuntime = null;
 		runtime.active = false;
 		process.off("exit", runtime.exitHandler);
+		for (const suggestion of runtime.activeSuggestions.values()) suggestion.controller.abort();
+		runtime.activeSuggestions.clear();
 		for (const connection of runtime.connections) connection.destroy();
 		await closeServer(runtime.server).catch(() => undefined);
 		await Promise.all([
@@ -344,6 +482,7 @@ export default function piNvimContext(pi: ExtensionAPI): void {
 			ctx,
 			server,
 			connections: new Set(),
+			activeSuggestions: new Map(),
 			socketPath,
 			manifestPath,
 			startedAt: new Date().toISOString(),
@@ -354,7 +493,7 @@ export default function piNvimContext(pi: ExtensionAPI): void {
 		};
 		currentRuntime = runtime;
 
-		server.on("connection", (socket) => handleConnection(runtime, pi, socket));
+		server.on("connection", (socket) => handleConnection(runtime, pi, socket, dependencies));
 		await new Promise<void>((resolveListen, rejectListen) => {
 			const onError = (error: Error) => rejectListen(error);
 			server.once("error", onError);
@@ -424,4 +563,8 @@ export default function piNvimContext(pi: ExtensionAPI): void {
 			);
 		},
 	});
+}
+
+export default function piNvimContext(pi: ExtensionAPI): void {
+	registerPiNvimContext(pi);
 }

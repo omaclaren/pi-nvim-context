@@ -1,16 +1,32 @@
 # pi-nvim-context
 
-Gather context in Neovim and append it to the input editor of a **standalone Pi session**. Nothing is submitted, no embedded terminal is opened, and neither application changes focus.
+Connect Neovim to a **standalone Pi session** for two deliberate workflows:
 
-Repeated mappings accumulate visible, editable context in Pi. Switch to Pi when ready, write the question, and press Enter normally.
+1. Gather visible, editable context in Pi's input without submitting it.
+2. Ask the active Pi model for an explicit cursor completion or selection rewrite without starting a Pi agent turn.
 
-## What it sends
+Copilot can keep owning automatic Insert-mode completion and `Tab`; Pi is invoked only through explicit mappings.
+
+## Features
+
+### Context gathering
+
+Repeated mappings accumulate context in Pi's input editor. Switch to Pi when ready, write the question, and press Enter normally.
 
 - current file reference
 - current cursor location and in-memory line
 - exact visual selection
 - current Neovim diagnostics
 - complete in-memory buffer, including unsaved edits
+
+### Direct editor suggestions
+
+- short completion at the cursor, shown as Neovim virtual text
+- instruction-driven visual-selection rewrite, shown as a non-focused diff
+- regenerate, accept, cancel, and dismiss actions
+- exact `changedtick`, target-range, and original-text validation
+- one undoable Neovim edit on acceptance
+- no automatic save or buffer reload
 
 The Pi extension exposes a private Unix socket. The Neovim plugin discovers running sessions, chooses an exact working-directory match when unambiguous, and otherwise asks which Pi session to use.
 
@@ -30,7 +46,7 @@ This repository contains both halves of the bridge.
 pi install /absolute/path/to/pi-nvim-context
 ```
 
-Restart Pi after installing or changing the package. A reload is not enough when switching package sources.
+Fully restart Pi after installing or updating the package. `/reload` is not enough when switching package sources.
 
 ### Neovim plugin
 
@@ -46,7 +62,13 @@ Then configure it after `plug#end()`:
 require("pi-nvim-context").setup()
 ```
 
+Restart existing Neovim processes after changing the plugin or mappings.
+
 ## Default mappings
+
+The mappings assume Space is already configured as `<leader>`.
+
+### Context
 
 | Mapping | Action |
 |---|---|
@@ -58,7 +80,15 @@ require("pi-nvim-context").setup()
 | `Space p b` | Add the complete in-memory buffer |
 | `Space p i` | Show bridge status |
 
-The mappings assume Space is already configured as `<leader>`.
+### Suggestions and edits
+
+| Mapping | Action |
+|---|---|
+| `Space p c` | Ask Pi for a completion after the Normal-mode cursor character |
+| Visual `Space p r` | Enter an instruction and ask Pi to rewrite the selection |
+| `Space p a` | Accept the visible Pi completion or rewrite |
+| `Space p n` | Generate a materially different result |
+| `Space p x` | Cancel or dismiss the Pi request/result |
 
 Corresponding commands are:
 
@@ -70,17 +100,47 @@ Corresponding commands are:
 :PiContextDiagnostics
 :PiContextBuffer
 :PiContextStatus
+:PiSuggest
+:PiRewrite
+:PiSuggestAccept
+:PiSuggestAgain
+:PiSuggestDismiss
 ```
+
+## Copilot coexistence
+
+`pi-nvim-context` does not map `Tab` or modify Copilot's acceptance mappings. When an explicit Pi request starts, it asks `copilot.vim` to dismiss any currently visible Copilot suggestion, so the previews do not overlap.
+
+A practical division of labour is:
+
+- **Copilot:** automatic, low-latency Insert-mode completion and `Tab` acceptance.
+- **Pi completion:** explicit, short completion with the active Pi model and thinking off.
+- **Pi rewrite:** explicit selected-range edit with the instruction you enter and low thinking when the model supports reasoning.
+- **Full Pi agent:** whole-file, multi-file, tool-using, or autonomous work.
+
+## Direct-suggestion context and model use
+
+Cursor completions send up to 12,000 characters before and 6,000 after the cursor. Rewrites additionally send the exact selected text and your instruction. Prefix, selection, and suffix are sent as separate strings, avoiding UTF-8 byte versus JavaScript UTF-16 offset errors.
+
+Direct suggestions:
+
+- use the selected standalone Pi session's active model and resolved authentication;
+- run only while that Pi session is idle;
+- do not use tools, submit a Pi turn, append to session history, or automatically inherit the full Pi conversation;
+- do not include other project files unless their text is already inside the bounded editor excerpt;
+- are discarded if the Neovim buffer changes while generation is running or while a result is visible.
+
+An `openai-codex/...` active model uses subscription-backed authentication. An `openai/...` model uses API-billed OpenAI Platform authentication.
 
 ## Session selection
 
-On the first send:
+On the first operation:
 
 1. If exactly one running Pi session has the same working directory as Neovim, it is selected automatically.
 2. If only one Pi bridge exists in total, it is selected automatically.
 3. Otherwise, Neovim shows a session picker.
 
-The selection lasts for the current Neovim process. Use `Space p p` to change it. If Pi restarts, the next send discovers its replacement automatically.
+The selection lasts for the current Neovim process. Use `Space p p` to change it. If Pi restarts, the next operation discovers its replacement automatically. Suggestion commands filter out older running bridge versions that do not advertise suggestion support.
 
 ## Configuration
 
@@ -92,6 +152,16 @@ require("pi-nvim-context").setup({
   max_selection_bytes = 100 * 1024,
   max_buffer_bytes = 200 * 1024,
   max_diagnostics = 50,
+
+  suggest_timeout_ms = 70 * 1000,
+  rewrite_timeout_ms = 130 * 1000,
+  suggest_prefix_chars = 12 * 1000,
+  suggest_suffix_chars = 6 * 1000,
+  max_rewrite_bytes = 100 * 1024,
+  max_preview_lines = 12,
+  rewrite_preview_width = 92,
+  rewrite_preview_height = 18,
+
   keymaps = {
     pick = "<leader>pp",
     file = "<leader>pf",
@@ -100,6 +170,11 @@ require("pi-nvim-context").setup({
     diagnostics = "<leader>pd",
     buffer = "<leader>pb",
     status = "<leader>pi",
+    suggest = "<leader>pc",
+    rewrite = "<leader>pr",
+    accept = "<leader>pa",
+    again = "<leader>pn",
+    dismiss = "<leader>px",
   },
 })
 ```
@@ -108,13 +183,14 @@ Set an individual mapping to `false`, or set `keymaps = false` and map the Lua f
 
 ## Behavior and safety
 
-- A context send calls Pi's `ctx.ui.pasteToEditor()`; it never calls `sendUserMessage()` and never starts an agent turn.
-- Context is inserted at Pi's current input cursor. Normally that cursor is at the end of the draft.
-- Large pastes use Pi's normal paste-collapse behavior.
+- Context gathering calls Pi's `ctx.ui.pasteToEditor()` and never submits the draft.
+- Direct suggestions call the model independently and never alter Pi's input editor.
+- Context and suggestion traffic is sent only after an explicit mapping or command.
 - Socket directories are user-specific and mode `0700`; socket and manifest files are mode `0600`.
 - The bridge starts only for interactive Pi TUI sessions.
-- Payloads are bounded and truncated before transmission.
-- Context is manual rather than continuously synchronized, so files are not exposed merely by visiting them in Neovim.
+- Request, context, selection, and response sizes are bounded.
+- Closing a request from Neovim aborts its in-flight model call.
+- Accepting a result calls `nvim_buf_set_text()` once and never writes the file.
 
 ## Development
 
@@ -124,4 +200,4 @@ npm run typecheck
 npm test
 ```
 
-The tests cover the Pi socket lifecycle and prefill behavior, plus Neovim formatting, truncation, commands, and mappings.
+Tests cover the private socket lifecycle, direct completion and rewrite requests, Pi-input isolation, stale-session cleanup, Unicode-safe Neovim ranges, formatting, truncation, commands, and mappings.

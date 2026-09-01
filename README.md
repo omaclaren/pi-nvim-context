@@ -200,6 +200,12 @@ Set an individual mapping to `false`, or set `keymaps = false` and map the Lua f
 - Closing a request from Neovim aborts its in-flight model call.
 - Accepting a result calls `nvim_buf_set_text()` once and never writes the file.
 
+## Related work and inspirations
+
+- [pi-nvim](https://github.com/carderne/pi-nvim)
+- [pi-ide-context](https://github.com/Andy8647/pi-ide-context)
+- [sidekick.nvim](https://github.com/folke/sidekick.nvim)
+
 ## Development
 
 ```sh

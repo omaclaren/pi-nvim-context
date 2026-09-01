@@ -5,7 +5,7 @@ Connect Neovim to a **standalone Pi session** for two deliberate workflows:
 1. Gather visible, editable context in Pi's input without submitting it.
 2. Ask the active Pi model for an explicit cursor completion, instruction-guided insertion, or selection rewrite without starting a Pi agent turn.
 
-Copilot can keep owning automatic Insert-mode completion and `Tab`; Pi is invoked only through explicit mappings.
+An inline completion model such as GitHub Copilot can keep owning automatic Insert-mode completion and `Tab`; Pi is invoked only through explicit mappings.
 
 ## Features
 
@@ -68,7 +68,7 @@ Restart existing Neovim processes after changing the plugin or mappings.
 
 ## Default mappings
 
-For a compact one-page reference covering Pi context, direct edits, Copilot, and the system clipboard, see [CHEATSHEET.md](CHEATSHEET.md).
+For a compact one-page reference covering Pi context, direct edits, the system clipboard, and an optional Copilot setup as an example, see [CHEATSHEET.md](CHEATSHEET.md).
 
 The mappings assume Space is already configured as `<leader>`.
 
@@ -118,13 +118,15 @@ Corresponding commands are:
 :PiSuggestPreview
 ```
 
-## Copilot coexistence
+## Inline completion coexistence (Copilot example)
 
-`pi-nvim-context` never modifies Insert-mode `Tab`, so Copilot keeps its normal acceptance mapping. While a Pi result is visible, the plugin temporarily installs a buffer-local **Normal-mode** `Tab` mapping; accepting or dismissing the result removes it. When an explicit Pi request starts, it also asks `copilot.vim` to dismiss any currently visible Copilot suggestion, so the previews do not overlap.
+No inline completion plugin is required. `pi-nvim-context` leaves Insert-mode `Tab` untouched, allowing a model-backed completion plugin such as GitHub Copilot to retain its normal acceptance mapping. While a Pi result is visible, the plugin temporarily installs a buffer-local **Normal-mode** `Tab` mapping; accepting or dismissing the result removes it.
+
+As an optional compatibility detail, direct Pi requests make a best-effort call to dismiss a visible `copilot.vim` suggestion so the previews do not overlap. Nothing happens when `copilot.vim` is absent.
 
 A practical division of labour is:
 
-- **Copilot:** automatic, low-latency Insert-mode completion and `Tab` acceptance.
+- **Inline completion model (for example, Copilot):** automatic, low-latency Insert-mode completion and `Tab` acceptance.
 - **Pi completion:** explicit, short continuation with the active Pi model and thinking off.
 - **Pi guided insertion:** explicit cursor insertion following the instruction you enter, with low thinking when supported.
 - **Pi rewrite:** explicit selected-range edit following your instruction, with low thinking when supported.

@@ -1,6 +1,6 @@
-# Neovim + Pi + Copilot cheat sheet
+# Neovim + Pi cheat sheet (with an optional Copilot example)
 
-`<leader>` is **Space**. Pi mappings work in Neovim; Copilot remains responsible for automatic Insert-mode completion.
+`<leader>` is **Space**. Pi does not require Copilot or another inline completion plugin. This example leaves automatic Insert-mode completion to Copilot while Pi handles deliberate requests.
 
 ## Which tool should I use?
 
@@ -10,7 +10,7 @@
 | Get a deliberate completion at one cursor position | `Space p c` |
 | Insert something specific at the cursor | `Space p g`, then enter the instruction |
 | Rewrite selected text according to an instruction | Visual `Space p r` |
-| Accept a fast automatic completion while typing | Copilot `Tab` |
+| Accept a fast automatic completion while typing | Inline completion plugin (for example, Copilot): `Tab` |
 | Whole-file, multi-file, or tool-using work | The normal persistent Pi chat/agent |
 
 ## Add context to the Pi chat draft
@@ -74,7 +74,9 @@ This direct request cannot search for or verify references. Supply exact bibliog
 
 After acceptance, `u` undoes the complete Pi edit in one step and `Ctrl-R` redoes it. Nothing is saved until `:write`.
 
-## Copilot
+## Optional inline completion example: Copilot
+
+These mappings illustrate one complementary Copilot setup; `pi-nvim-context` does not install or require them.
 
 | Mode | Mapping | Action |
 |---|---|---|
@@ -84,7 +86,7 @@ After acceptance, `u` undoes the complete Pi edit in one step and `Ctrl-R` redoe
 | Insert | `Option-\` | Explicitly request a Copilot suggestion |
 | Normal | `Space c t` | Toggle Copilot globally |
 
-Starting a direct Pi request dismisses the currently visible Copilot ghost text. Insert-mode `Tab` remains Copilot-only. A visible Pi result temporarily gives **Normal-mode** `Tab` to Pi; the mapping disappears when the result is accepted or dismissed.
+When `copilot.vim` is installed, starting a direct Pi request makes a best-effort attempt to dismiss its visible ghost text. Insert-mode `Tab` remains available to the inline completion plugin. A visible Pi result temporarily gives **Normal-mode** `Tab` to Pi; the mapping disappears when the result is accepted or dismissed.
 
 ## System clipboard
 
@@ -144,4 +146,4 @@ This shows whether that Pi session's bridge is active.
 4. In Neovim, run `:PiContextStatus` or press `Space p i`.
 5. Press `Space p p` to inspect and explicitly choose among discovered Pi bridges.
 6. Check `:messages` for bridge or model errors.
-7. Check `:Copilot status` for Copilot problems.
+7. If using Copilot, check `:Copilot status` for Copilot problems.

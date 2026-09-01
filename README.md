@@ -28,7 +28,7 @@ Repeated mappings accumulate context in Pi's input editor. Switch to Pi when rea
 - one undoable Neovim edit on acceptance
 - no automatic save or buffer reload
 
-The Pi extension exposes a private Unix socket. The Neovim plugin discovers running sessions, chooses an exact working-directory match when unambiguous, and otherwise asks which Pi session to use.
+The Pi extension exposes a private Unix socket. On first use for each Neovim working directory, the plugin asks you to confirm an exact-directory Pi link; a different-directory session is available only through the explicit picker.
 
 ## Requirements
 
@@ -74,13 +74,13 @@ The mappings assume Space is already configured as `<leader>`.
 
 | Mapping | Action |
 |---|---|
-| `Space p p` | Select the standalone Pi session |
+| `Space p p` | Explicitly link the current Neovim cwd to a Pi session |
 | `Space p f` | Add the current file |
 | `Space p l` | Add the current file, cursor location, and current line |
 | Visual `Space p s` | Add the exact selection and its file/range |
 | `Space p d` | Add current-buffer diagnostics |
 | `Space p b` | Add the complete in-memory buffer |
-| `Space p i` | Show bridge status |
+| `Space p i` | Show Neovim cwd, linked Pi, and bridge status |
 
 ### Suggestions and edits
 
@@ -126,7 +126,7 @@ Cursor completions send up to 12,000 characters before and 6,000 after the curso
 
 Direct suggestions:
 
-- use the selected standalone Pi session's active model and resolved authentication;
+- use the explicitly linked standalone Pi session's active model and resolved authentication;
 - run only while that Pi session is idle;
 - do not use tools, submit a Pi turn, append to session history, or automatically inherit the full Pi conversation;
 - do not include other project files unless their text is already inside the bounded editor excerpt;
@@ -134,15 +134,21 @@ Direct suggestions:
 
 An `openai-codex/...` active model uses subscription-backed authentication. An `openai/...` model uses API-billed OpenAI Platform authentication.
 
-## Session selection
+## Explicit Pi linking
 
-On the first operation:
+Context and suggestion operations never silently fall back to a Pi session in another directory.
 
-1. If exactly one running Pi session has the same working directory as Neovim, it is selected automatically.
-2. If only one Pi bridge exists in total, it is selected automatically.
-3. Otherwise, Neovim shows a session picker.
+On the first operation for a Neovim working directory:
 
-The selection lasts for the current Neovim process. Use `Space p p` to change it. If Pi restarts, the next operation discovers its replacement automatically. Suggestion commands filter out older running bridge versions that do not advertise suggestion support.
+1. Neovim discovers bridge-enabled Pi sessions with an exact working-directory match.
+2. It always asks you to confirm which matching session to link, even when there is only one.
+3. If there is no exact match, it sends nothing and explains that Pi may need restarting in that directory.
+
+Use `Space p p` to open the explicit picker at any time. This picker includes every discovered bridge, puts exact matches first, and labels different-directory sessions with a warning. Choosing one there is the deliberate cross-directory override.
+
+Links are scoped per Neovim working directory. Changing directories switches to that directory's independent link and cancels any pending Pi editor suggestion; returning to a directory restores its remembered link. One directory's choice never overrides another's. `Space p i` shows the current Neovim directory, linked Pi name/cwd/PID, and the number of exact matches.
+
+A Pi process that was already running when this package was installed or updated is invisible until it fully restarts and loads the bridge. Suggestion commands also filter out older bridges that do not advertise suggestion support.
 
 ## Configuration
 

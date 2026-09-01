@@ -40,6 +40,58 @@ vim.env.PI_NVIM_CONTEXT_RUNTIME_DIR = runtime_link
 equal(test.runtime_directory_is_secure(), false, "symlinked runtime directories are rejected")
 vim.env.PI_NVIM_CONTEXT_RUNTIME_DIR = original_runtime_override
 
+local original_cwd = vim.fn.getcwd()
+local exact_session = {
+  cwd = original_cwd,
+  sessionId = "exact-session",
+  pid = 101,
+  socketPath = "/tmp/exact-session.sock",
+  capabilities = { "prefill", "suggest" },
+}
+local other_session = {
+  cwd = project,
+  sessionId = "other-session",
+  pid = 202,
+  socketPath = "/tmp/other-session.sock",
+  capabilities = { "prefill" },
+}
+local automatic_candidates = test.candidate_sessions({ other_session, exact_session }, false)
+equal(#automatic_candidates, 1, "automatic linking offers exact-cwd sessions only")
+equal(automatic_candidates[1], exact_session, "automatic linking keeps the exact-cwd candidate")
+equal(#test.candidate_sessions({ other_session }, false), 0, "automatic linking never falls back across directories")
+equal(#test.candidate_sessions({ other_session, exact_session }, true), 2, "the explicit picker offers cross-directory sessions")
+equal(#test.candidate_sessions({ other_session, exact_session }, true, "suggest"), 1, "capability filtering excludes outdated bridges")
+matches(test.session_label(exact_session), "✓ exact cwd", "picker labels exact-cwd sessions")
+matches(test.session_label(other_session), "⚠ different cwd", "picker warns about cross-directory sessions")
+matches(test.session_label(other_session, project), "✓ exact cwd", "async labels stay relative to their captured cwd")
+test.set_selected_session(exact_session, original_cwd)
+equal(test.get_linked_session(), exact_session, "an explicit Pi link is available in its Neovim cwd")
+local stale_generation = test.link_generation(original_cwd)
+test.set_selected_session(exact_session, original_cwd)
+local stale_linked, stale_reason = test.link_session(other_session, original_cwd, stale_generation)
+equal(stale_linked, false, "an older same-cwd picker cannot overwrite a newer link choice")
+equal(stale_reason, "superseded", "stale same-cwd pickers report why they were rejected")
+equal(test.get_linked_session(), exact_session, "rejecting a stale picker preserves the newer cwd link")
+vim.api.nvim_set_current_dir(project)
+equal(test.get_linked_session(), nil, "a Pi link cannot leak into another Neovim cwd")
+equal(test.link_session(exact_session, original_cwd), false, "a stale picker cannot link after Neovim changes cwd")
+equal(test.get_linked_session(), nil, "a rejected stale picker leaves Neovim unlinked")
+vim.api.nvim_set_current_dir(original_cwd)
+equal(test.get_linked_session(), exact_session, "returning to a Neovim cwd restores its scoped Pi link")
+test.set_selected_session(other_session, project)
+vim.api.nvim_set_current_dir(project)
+equal(test.get_linked_session(), other_session, "a second Neovim cwd keeps an independent Pi link")
+vim.api.nvim_set_current_dir(original_cwd)
+equal(test.get_linked_session(), exact_session, "linking a second cwd does not override the first cwd's link")
+test.set_selected_session(exact_session, project)
+test.invalidate_session(exact_session)
+equal(test.get_linked_session(), nil, "a dead Pi socket is removed from the current cwd link")
+vim.api.nvim_set_current_dir(project)
+equal(test.get_linked_session(), nil, "a dead Pi socket is removed from every cwd link")
+vim.api.nvim_set_current_dir(original_cwd)
+test.set_selected_session(exact_session, original_cwd)
+test.clear_link(project)
+
 local bufnr = vim.api.nvim_create_buf(true, false)
 vim.api.nvim_set_current_buf(bufnr)
 vim.api.nvim_buf_set_name(bufnr, project .. "/notes.md")
@@ -121,6 +173,14 @@ equal(vim.fn.maparg("<F6>", "n") ~= "", true, "setup registers normal mappings")
 equal(vim.fn.maparg("<F7>", "x") ~= "", true, "setup registers visual mappings")
 equal(vim.fn.maparg("<F8>", "n") ~= "", true, "setup registers cursor-suggestion mappings")
 equal(vim.fn.maparg("<F9>", "x") ~= "", true, "setup registers rewrite mappings")
+test.set_selected_session(exact_session, original_cwd)
+local original_notify = vim.notify
+vim.notify = function() end
+vim.api.nvim_set_current_dir(project)
+equal(test.get_linked_session(), nil, "DirChanged activates the new working directory's independent link scope")
+vim.api.nvim_set_current_dir(original_cwd)
+equal(test.get_linked_session(), exact_session, "DirChanged restores a remembered link when returning to its cwd")
+vim.notify = original_notify
 
 local edit_buf = vim.api.nvim_create_buf(true, false)
 vim.api.nvim_set_current_buf(edit_buf)
@@ -162,6 +222,7 @@ vim.bo[edit_buf].undolevels = undolevels
 vim.api.nvim_win_set_cursor(0, { 1, #"Complete this" - 1 })
 local suggest_module = require("pi-nvim-context.suggest")
 local sent_requests = {}
+local test_scope_epoch = 0
 local suggestion_config = {
   notify = false,
   suggest_timeout_ms = 1000,
@@ -177,6 +238,12 @@ suggest_module.configure({
   protocol = 1,
   get_config = function()
     return suggestion_config
+  end,
+  current_scope_cwd = function()
+    return vim.fn.getcwd()
+  end,
+  current_scope_epoch = function()
+    return test_scope_epoch
   end,
   notify = function() end,
   choose_suggestion_session = function(callback)
@@ -220,11 +287,37 @@ equal(vim.api.nvim_get_current_line(), "Complete this", "an accepted suggestion 
 vim.cmd("redo")
 equal(vim.api.nvim_get_current_line(), "Complete this instead", "an accepted suggestion can be redone as one change")
 
+local rewrite_input_callback
+local original_ui_input = vim.ui.input
+local original_rewrite_notify = vim.notify
+vim.ui.input = function(_, callback)
+  rewrite_input_callback = callback
+end
+vim.notify = function() end
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vim.cmd("normal! v$")
+local request_count_before_rewrite = #sent_requests
+suggest_module.rewrite()
+vim.api.nvim_set_current_dir(project)
+vim.api.nvim_set_current_dir(original_cwd)
+test_scope_epoch = test_scope_epoch + 1
+rewrite_input_callback("tighten")
+equal(#sent_requests, request_count_before_rewrite, "a rewrite prompt cannot survive a cwd switch away and back")
+vim.cmd("normal! \027")
+vim.ui.input = original_ui_input
+vim.notify = original_rewrite_notify
+
 local cancel_count = 0
 suggest_module.configure({
   protocol = 1,
   get_config = function()
     return suggestion_config
+  end,
+  current_scope_cwd = function()
+    return vim.fn.getcwd()
+  end,
+  current_scope_epoch = function()
+    return test_scope_epoch
   end,
   notify = function() end,
   choose_suggestion_session = function(callback)

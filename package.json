@@ -1,6 +1,6 @@
 {
   "name": "pi-nvim-context",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Bridge Neovim to standalone Pi sessions for accumulated context and explicit model-powered editor suggestions",
   "type": "module",
   "private": true,

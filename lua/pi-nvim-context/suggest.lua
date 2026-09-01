@@ -420,6 +420,10 @@ function S.dismiss()
   invalidate_and_clear(false)
 end
 
+function S.reset()
+  invalidate_and_clear(true)
+end
+
 local function transport_can_retry(err)
   return type(err) == "string"
     and (err:match("^Could not connect to Pi") or err:match("closed the connection without a response"))
@@ -552,6 +556,8 @@ function S.rewrite()
   if not bufnr then
     return
   end
+  local scope_cwd = env.current_scope_cwd()
+  local scope_epoch = env.current_scope_epoch()
   local target, target_error = capture_visual_target(bufnr)
   if not target then
     notify(target_error, vim.log.levels.WARN, true)
@@ -561,6 +567,10 @@ function S.rewrite()
     instruction = type(instruction) == "string" and vim.trim(instruction) or ""
     if instruction == "" then
       notify("Pi rewrite cancelled: no instruction was provided", vim.log.levels.WARN, true)
+      return
+    end
+    if env.current_scope_cwd() ~= scope_cwd or env.current_scope_epoch() ~= scope_epoch then
+      notify("Pi rewrite cancelled because Neovim's working directory changed", vim.log.levels.WARN, true)
       return
     end
     if not target_is_current(target) then
@@ -656,9 +666,7 @@ S._test = {
   get_state = function()
     return { pending = pending, preview = preview }
   end,
-  reset = function()
-    invalidate_and_clear(true)
-  end,
+  reset = S.reset,
 }
 
 return S

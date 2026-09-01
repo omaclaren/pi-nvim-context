@@ -6,7 +6,7 @@
 
 | Goal | Use |
 |---|---|
-| Ask Pi a question about editor content | Add context with `Space p …`, then write the question in Pi |
+| Ask Pi a question about editor content | Use `Space p f/l/s/d/b`, then write the question in Pi |
 | Get a deliberate completion at one cursor position | `Space p c` |
 | Rewrite selected text according to an instruction | Visual `Space p r` |
 | Accept a fast automatic completion while typing | Copilot `Tab` |
@@ -14,7 +14,7 @@
 
 ## Add context to the Pi chat draft
 
-These mappings append visible, editable text to the selected standalone Pi session. They **do not submit** a turn.
+These mappings append visible, editable text to the explicitly linked standalone Pi session. They **do not submit** a turn.
 
 | Mode | Mapping | Action |
 |---|---|---|
@@ -23,10 +23,12 @@ These mappings append visible, editable text to the selected standalone Pi sessi
 | Visual | `Space p s` | Add the exact selection and its file/range |
 | Normal | `Space p d` | Add current-buffer diagnostics |
 | Normal | `Space p b` | Add the complete in-memory buffer, including unsaved edits |
-| Normal | `Space p p` | Select or change the target Pi session |
-| Normal | `Space p i` | Show bridge and selected-session status |
+| Normal | `Space p p` | Explicitly link or change the target Pi session |
+| Normal | `Space p i` | Show Neovim cwd, linked Pi cwd/PID, and bridge status |
 
 Repeated additions accumulate in Pi's input. Switch to Pi, type the question after the gathered context, and press Enter normally.
+
+On the first operation, Neovim always asks you to confirm an exact-cwd Pi link. It never silently falls back to another directory. If no exact bridge exists, restart Pi in that directory or use `Space p p` for a deliberate cross-directory link. Each Neovim cwd keeps an independent remembered link; switching cwd switches links and cancels any pending suggestion.
 
 ## Direct Pi completions and rewrites
 
@@ -109,6 +111,7 @@ This shows whether that Pi session's bridge is active.
 ## Important behavior
 
 - Pi must be idle for a direct completion or rewrite. Context gathering still only edits Pi's draft.
+- Context and direct edits share the same explicit, cwd-scoped Pi link.
 - Cursor completion sees up to 12,000 characters before and 6,000 after the cursor.
 - A rewrite additionally sees the selected text and your instruction.
 - Direct requests do not use tools, the full Pi conversation, or other project files automatically.
@@ -123,6 +126,6 @@ This shows whether that Pi session's bridge is active.
 2. Restart Neovim so it loads the latest Lua plugin.
 3. In Pi, run `/nvim-context`.
 4. In Neovim, run `:PiContextStatus` or press `Space p i`.
-5. If several Pi sessions are running, press `Space p p` and choose one.
+5. Press `Space p p` to inspect and explicitly choose among discovered Pi bridges.
 6. Check `:messages` for bridge or model errors.
 7. Check `:Copilot status` for Copilot problems.

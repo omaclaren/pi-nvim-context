@@ -556,8 +556,11 @@ export function registerPiNvimContext(pi: ExtensionAPI, dependencies: ExtensionD
 			ctx.ui.notify(
 				[
 					"Neovim context bridge is active.",
-					`Session: ${pi.getSessionName() ?? runtime.ctx.sessionManager.getSessionId()}`,
-					`Directory: ${basename(dirname(runtime.socketPath))}`,
+					`Pi session: ${pi.getSessionName() ?? runtime.ctx.sessionManager.getSessionId()}`,
+					`Pi working directory: ${runtime.ctx.cwd}`,
+					"Capabilities: chat-context prefill, completion, rewrite",
+					`Private bridge directory: ${basename(dirname(runtime.socketPath))}`,
+					"Use Space p p in Neovim to link this session explicitly.",
 				].join("\n"),
 				"info",
 			);

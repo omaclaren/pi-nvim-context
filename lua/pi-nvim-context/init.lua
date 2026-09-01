@@ -37,7 +37,10 @@ local defaults = {
 }
 
 local config = vim.deepcopy(defaults)
-local selected_session = nil
+local linked_sessions = {}
+local link_generations = {}
+local scope_epoch = 0
+local last_scope_cwd = nil
 
 local function notify(message, level)
   vim.notify(message, level or vim.log.levels.INFO, { title = "Pi context" })
@@ -83,6 +86,45 @@ local function cwd_matches(candidate, cwd)
   return type(candidate) == "string"
     and candidate ~= ""
     and canonical_work_path(candidate) == canonical_work_path(cwd)
+end
+
+local function current_scope_cwd()
+  return canonical_work_path(vim.fn.getcwd())
+end
+
+local function current_scope_epoch()
+  return scope_epoch
+end
+
+local function link_generation(scope_cwd)
+  local scope = scope_cwd and canonical_work_path(scope_cwd) or current_scope_cwd()
+  return link_generations[scope] or 0
+end
+
+local function advance_link_generation(scope_cwd)
+  local scope = scope_cwd and canonical_work_path(scope_cwd) or current_scope_cwd()
+  link_generations[scope] = link_generation(scope) + 1
+end
+
+local function clear_link(scope_cwd)
+  local scope = scope_cwd and canonical_work_path(scope_cwd) or current_scope_cwd()
+  linked_sessions[scope] = nil
+  advance_link_generation(scope)
+end
+
+local function linked_session(capability, scope_cwd)
+  local scope = scope_cwd and canonical_work_path(scope_cwd) or current_scope_cwd()
+  local session = linked_sessions[scope]
+  if not session then
+    return nil
+  end
+  if capability
+    and (type(session.capabilities) ~= "table"
+      or not vim.tbl_contains(session.capabilities, capability))
+  then
+    return nil
+  end
+  return session
 end
 
 local function close_handle(handle)
@@ -246,8 +288,9 @@ local function ping_sessions(sessions, callback)
       type = "ping",
     }, function(err, response)
       if not err and response and response.ok then
-        local current = response.info or session
-        current.socketPath = current.socketPath or session.socketPath
+        local info = type(response.info) == "table" and response.info or {}
+        local current = vim.tbl_extend("force", {}, session, info)
+        current.socketPath = session.socketPath
         table.insert(responsive, current)
       end
       pending = pending - 1
@@ -274,13 +317,15 @@ local function short_session_id(session)
   return session.sessionId:sub(1, 8)
 end
 
-local function session_label(session)
+local function session_label(session, target_cwd)
   local name = session.sessionName
   if type(name) ~= "string" or name == "" then
     name = "Pi " .. short_session_id(session)
   end
   local cwd = type(session.cwd) == "string" and session.cwd or "unknown cwd"
-  return string.format("%s — %s (PID %s)", name, cwd, tostring(session.pid or "?"))
+  local relationship = cwd_matches(session.cwd, target_cwd or current_scope_cwd()) and "✓ exact cwd"
+    or "⚠ different cwd"
+  return string.format("%s · %s — %s (PID %s)", relationship, name, cwd, tostring(session.pid or "?"))
 end
 
 local function session_has_capability(session, capability)
@@ -290,81 +335,186 @@ local function session_has_capability(session, capability)
   return type(session.capabilities) == "table" and vim.tbl_contains(session.capabilities, capability)
 end
 
-local function select_from(sessions, callback, prompt)
+local same_session
+
+local function link_session(session, scope_cwd, expected_generation, preserve_suggestion, expected_scope_epoch)
+  local scope = scope_cwd and canonical_work_path(scope_cwd) or current_scope_cwd()
+  if current_scope_cwd() ~= scope or (expected_scope_epoch ~= nil and scope_epoch ~= expected_scope_epoch) then
+    return false, "cwd"
+  end
+  if expected_generation ~= nil and link_generation(scope) ~= expected_generation then
+    return false, "superseded"
+  end
+  local previous = linked_sessions[scope]
+  if previous and not same_session(previous, session) and not preserve_suggestion then
+    suggestion.reset()
+  end
+  linked_sessions[scope] = session
+  advance_link_generation(scope)
+  notify(
+    "Linked this Neovim working directory to Pi:\n"
+      .. scope
+      .. "\n→ "
+      .. session_label(session, scope)
+  )
+  return true
+end
+
+local function select_from(
+  sessions,
+  callback,
+  prompt,
+  scope_cwd,
+  expected_generation,
+  preserve_suggestion,
+  expected_scope_epoch
+)
   vim.ui.select(sessions, {
-    prompt = prompt or "Send Neovim context to which Pi session?",
-    format_item = session_label,
+    prompt = prompt or "Link this Neovim working directory to which Pi session?",
+    format_item = function(session)
+      return session_label(session, scope_cwd)
+    end,
   }, function(choice)
-    if choice then
-      selected_session = choice
+    if not choice then
+      callback(nil)
+      return
+    end
+    local linked, reason = link_session(
+      choice,
+      scope_cwd,
+      expected_generation,
+      preserve_suggestion,
+      expected_scope_epoch
+    )
+    if linked then
       callback(choice)
     else
+      notify(
+        reason == "cwd" and "Pi linking was cancelled because Neovim's working directory changed."
+          or "Pi linking was cancelled because this Neovim cwd's Pi link changed while the picker was open.",
+        vim.log.levels.WARN
+      )
       callback(nil)
     end
   end)
 end
 
+local function candidate_sessions(sessions, force_picker, capability, scope_cwd)
+  local candidates = sessions
+  if capability then
+    candidates = vim.tbl_filter(function(session)
+      return session_has_capability(session, capability)
+    end, candidates)
+  end
+  if not force_picker then
+    local cwd = scope_cwd or current_scope_cwd()
+    candidates = vim.tbl_filter(function(session)
+      return cwd_matches(session.cwd, cwd)
+    end, candidates)
+  end
+  return candidates
+end
+
 local function choose_session(force_picker, callback, capability)
+  local requested_scope = current_scope_cwd()
+  local requested_generation = link_generation(requested_scope)
+  local requested_scope_epoch = scope_epoch
   ping_sessions(scan_sessions(), function(sessions)
-    if capability then
-      sessions = vim.tbl_filter(function(session)
-        return session_has_capability(session, capability)
-      end, sessions)
+    if current_scope_cwd() ~= requested_scope or scope_epoch ~= requested_scope_epoch then
+      notify("Pi linking was cancelled because Neovim's working directory changed.", vim.log.levels.WARN)
+      callback(nil)
+      return
     end
-    if #sessions == 0 then
-      notify(
-        capability == "suggest"
-            and "No running Pi suggestion bridge found. Restart Pi after updating pi-nvim-context."
-          or "No running Pi context bridge found. Restart Pi after installing pi-nvim-context.",
-        vim.log.levels.WARN
-      )
+    if link_generation(requested_scope) ~= requested_generation then
+      notify("Pi linking was cancelled because this Neovim cwd's Pi link changed.", vim.log.levels.WARN)
       callback(nil)
       return
     end
 
-    if not force_picker then
-      local cwd = vim.fn.getcwd()
-      local matches = vim.tbl_filter(function(session)
-        return cwd_matches(session.cwd, cwd)
-      end, sessions)
-      if #matches == 1 then
-        selected_session = matches[1]
-        callback(matches[1])
-        return
+    local candidates = candidate_sessions(sessions, force_picker, capability, requested_scope)
+    if #candidates == 0 then
+      if force_picker then
+        notify(
+          capability == "suggest"
+              and "No running Pi session with suggestion support was found. Restart Pi after updating pi-nvim-context."
+            or "No running Pi context bridge was found. Restart Pi after installing pi-nvim-context.",
+          vim.log.levels.WARN
+        )
+      elseif capability == "suggest" then
+        notify(
+          "No bridge-enabled Pi session with suggestion support matches this Neovim working directory:\n"
+            .. requested_scope
+            .. "\nRestart Pi there after updating pi-nvim-context, or use Space p p to explicitly link a different session.",
+          vim.log.levels.WARN
+        )
+      else
+        notify(
+          "No bridge-enabled Pi session matches this Neovim working directory:\n"
+            .. requested_scope
+            .. "\nRestart Pi in that directory, or use Space p p to explicitly link a different-directory session.",
+          vim.log.levels.WARN
+        )
       end
-      if #sessions == 1 then
-        selected_session = sessions[1]
-        callback(sessions[1])
-        return
-      end
-    elseif #sessions == 1 then
-      selected_session = sessions[1]
-      notify("Selected " .. session_label(sessions[1]))
-      callback(sessions[1])
+      callback(nil)
       return
     end
 
+    local prompt = force_picker
+        and ("Link Neovim cwd " .. requested_scope .. " to which Pi session?")
+      or ("Confirm the Pi link for Neovim cwd " .. requested_scope .. ":")
     select_from(
-      sessions,
+      candidates,
       callback,
-      capability == "suggest" and "Use which Pi session for this editor suggestion?" or nil
+      prompt,
+      requested_scope,
+      requested_generation,
+      capability == "suggest",
+      requested_scope_epoch
     )
   end)
 end
 
 local function choose_suggestion_session(callback)
-  if selected_session and session_has_capability(selected_session, "suggest") then
-    callback(selected_session)
+  local current = linked_session("suggest")
+  if current then
+    callback(current)
     return
   end
-  selected_session = nil
   choose_session(false, callback, "suggest")
 end
 
-local function invalidate_session(session)
-  if selected_session and session and selected_session.socketPath == session.socketPath then
-    selected_session = nil
+same_session = function(first, second)
+  return first
+    and second
+    and type(first.socketPath) == "string"
+    and first.socketPath == second.socketPath
+end
+
+local function invalidate_session(session, scope_cwd, expected_generation)
+  if scope_cwd then
+    local scope = canonical_work_path(scope_cwd)
+    if expected_generation ~= nil and link_generation(scope) ~= expected_generation then
+      return false
+    end
+    if same_session(linked_sessions[scope], session) then
+      linked_sessions[scope] = nil
+      advance_link_generation(scope)
+      return true
+    end
+    return false
   end
+
+  local stale_scopes = {}
+  for scope, linked in pairs(linked_sessions) do
+    if same_session(linked, session) then
+      table.insert(stale_scopes, scope)
+    end
+  end
+  for _, scope in ipairs(stale_scopes) do
+    linked_sessions[scope] = nil
+    advance_link_generation(scope)
+  end
+  return #stale_scopes > 0
 end
 
 local function truncate_utf8(text, max_bytes)
@@ -396,11 +546,14 @@ local function trim_payload(text)
   return prefix .. marker
 end
 
-local function send_context(text, summary, retried)
+local function send_context(text, summary, retried, scope_cwd)
+  local origin_scope = scope_cwd and canonical_work_path(scope_cwd) or current_scope_cwd()
   local function send(session)
     if not session then
       return
     end
+    local request_generation = link_generation(origin_scope)
+    local request_scope_epoch = scope_epoch
     socket_request(session.socketPath, {
       protocol = PROTOCOL_VERSION,
       type = "prefill",
@@ -408,27 +561,38 @@ local function send_context(text, summary, retried)
       summary = summary,
     }, function(err, response)
       if err or not response or not response.ok then
-        selected_session = nil
-        if not retried then
+        local failed_link_is_origin = scope_epoch == request_scope_epoch
+          and link_generation(origin_scope) == request_generation
+          and same_session(linked_session(nil, origin_scope), session)
+        invalidate_session(session, origin_scope, request_generation)
+        if not retried and failed_link_is_origin and current_scope_cwd() == origin_scope then
           choose_session(false, function(replacement)
             if replacement then
-              send_context(text, summary, true)
+              send_context(text, summary, true, origin_scope)
             end
           end)
           return
         end
         local reason = err or (response and response.error) or "unknown error"
-        notify("Could not add context to Pi: " .. tostring(reason), vim.log.levels.ERROR)
+        notify(
+          "Could not add context to Pi for Neovim cwd " .. origin_scope .. ": " .. tostring(reason),
+          vim.log.levels.ERROR
+        )
         return
       end
       if config.notify then
-        notify("Added " .. summary .. " to " .. session_label(session))
+        notify("Added " .. summary .. " to " .. session_label(session, origin_scope))
       end
     end)
   end
 
-  if selected_session then
-    send(selected_session)
+  if current_scope_cwd() ~= origin_scope then
+    notify("Context sending was cancelled because Neovim's working directory changed.", vim.log.levels.WARN)
+    return
+  end
+  local current = linked_session(nil, origin_scope)
+  if current then
+    send(current)
   else
     choose_session(false, send)
   end
@@ -639,27 +803,33 @@ local function format_buffer(bufnr, session)
   )
 end
 
+local function with_linked_session(callback)
+  local scope_cwd = current_scope_cwd()
+  local current = linked_session(nil, scope_cwd)
+  if current then
+    callback(current, scope_cwd)
+  else
+    choose_session(false, function(session)
+      if session then
+        callback(session, scope_cwd)
+      end
+    end)
+  end
+end
+
 local function with_selected_formatter(formatter, summary)
   local bufnr = current_buffer()
   if not bufnr then
     return
   end
 
-  local function build(session)
+  local function build(session, scope_cwd)
     if not buffer_is_available(bufnr) then
       return
     end
-    send_context(formatter(bufnr, session), summary, false)
+    send_context(formatter(bufnr, session), summary, false, scope_cwd)
   end
-  if selected_session then
-    build(selected_session)
-  else
-    choose_session(false, function(session)
-      if session then
-        build(session)
-      end
-    end)
-  end
+  with_linked_session(build)
 end
 
 function M.pick()
@@ -686,21 +856,13 @@ function M.add_location()
   local cursor = current_cursor()
   local line = vim.api.nvim_buf_get_lines(bufnr, cursor[1] - 1, cursor[1], false)[1] or ""
 
-  local function build(session)
+  local function build(session, scope_cwd)
     if not buffer_is_available(bufnr) then
       return
     end
-    send_context(format_location_at(bufnr, session, cursor, line), "current location", false)
+    send_context(format_location_at(bufnr, session, cursor, line), "current location", false, scope_cwd)
   end
-  if selected_session then
-    build(selected_session)
-  else
-    choose_session(false, function(session)
-      if session then
-        build(session)
-      end
-    end)
-  end
+  with_linked_session(build)
 end
 
 function M.add_selection()
@@ -714,22 +876,19 @@ function M.add_selection()
     return
   end
 
-  local function build(session)
+  local function build(session, scope_cwd)
     if not buffer_is_available(bufnr) then
       return
     end
     local line_count = region.end_line - region.start_line + 1
-    send_context(format_selection(bufnr, session, region), string.format("selection (%d lines)", line_count), false)
+    send_context(
+      format_selection(bufnr, session, region),
+      string.format("selection (%d lines)", line_count),
+      false,
+      scope_cwd
+    )
   end
-  if selected_session then
-    build(selected_session)
-  else
-    choose_session(false, function(session)
-      if session then
-        build(session)
-      end
-    end)
-  end
+  with_linked_session(build)
 end
 
 function M.add_diagnostics()
@@ -743,21 +902,18 @@ function M.add_diagnostics()
     return
   end
 
-  local function build(session)
+  local function build(session, scope_cwd)
     if not buffer_is_available(bufnr) then
       return
     end
-    send_context(format_diagnostics(bufnr, session, diagnostics), string.format("%d diagnostics", #diagnostics), false)
+    send_context(
+      format_diagnostics(bufnr, session, diagnostics),
+      string.format("%d diagnostics", #diagnostics),
+      false,
+      scope_cwd
+    )
   end
-  if selected_session then
-    build(selected_session)
-  else
-    choose_session(false, function(session)
-      if session then
-        build(session)
-      end
-    end)
-  end
+  with_linked_session(build)
 end
 
 function M.add_buffer()
@@ -772,22 +928,50 @@ M.dismiss_suggestion = suggestion.dismiss
 
 function M.status()
   local sessions = scan_sessions()
-  if selected_session then
-    socket_request(selected_session.socketPath, {
+  local cwd = current_scope_cwd()
+  local exact_count = #vim.tbl_filter(function(session)
+    return cwd_matches(session.cwd, cwd)
+  end, sessions)
+  local current = linked_session(nil, cwd)
+  if current then
+    local request_generation = link_generation(cwd)
+    socket_request(current.socketPath, {
       protocol = PROTOCOL_VERSION,
       type = "info",
     }, function(err, response)
       if err or not response or not response.ok then
-        selected_session = nil
-        notify("The selected Pi session is no longer available", vim.log.levels.WARN)
+        if link_generation(cwd) == request_generation and same_session(linked_session(nil, cwd), current) then
+          invalidate_session(current, cwd, request_generation)
+          notify(
+            "The Pi session linked for this Neovim working directory is no longer available:\n"
+              .. cwd
+              .. "\nUse Space p p to link again.",
+            vim.log.levels.WARN
+          )
+        end
         return
       end
-      selected_session = response.info or selected_session
-      notify("Selected: " .. session_label(selected_session) .. string.format("\n%d bridge(s) discovered", #sessions))
+      if link_generation(cwd) ~= request_generation or not same_session(linked_session(nil, cwd), current) then
+        return
+      end
+      local info = type(response.info) == "table" and response.info or {}
+      linked_sessions[cwd] = vim.tbl_extend("force", {}, current, info)
+      linked_sessions[cwd].socketPath = current.socketPath
+      notify(
+        "Neovim working directory:\n"
+          .. cwd
+          .. "\nLinked Pi:\n"
+          .. session_label(linked_sessions[cwd], cwd)
+          .. string.format("\n%d bridge(s) discovered; %d exact cwd match(es)", #sessions, exact_count)
+      )
     end)
     return
   end
-  notify(string.format("No Pi session selected; %d bridge(s) discovered", #sessions))
+  notify(
+    "This Neovim working directory is not linked to Pi:\n"
+      .. cwd
+      .. string.format("\n%d bridge(s) discovered; %d exact cwd match(es)\nUse Space p p to link explicitly.", #sessions, exact_count)
+  )
 end
 
 local command_definitions = {
@@ -846,6 +1030,44 @@ local function register_keymaps()
   end
 end
 
+local function register_link_autocommands()
+  local group = vim.api.nvim_create_augroup("PiNvimContextLink", { clear = true })
+  last_scope_cwd = current_scope_cwd()
+  scope_epoch = scope_epoch + 1
+  vim.api.nvim_create_autocmd({ "DirChanged", "WinEnter", "TabEnter" }, {
+    group = group,
+    callback = function()
+      local current_scope = current_scope_cwd()
+      if last_scope_cwd == current_scope then
+        return
+      end
+      local previous_scope = last_scope_cwd
+      last_scope_cwd = current_scope
+      scope_epoch = scope_epoch + 1
+      suggestion.reset()
+      local current = linked_session()
+      if current then
+        notify(
+          "Neovim working directory changed:\n"
+            .. tostring(previous_scope)
+            .. "\n→ "
+            .. current_scope
+            .. "\nUsing its remembered Pi link:\n"
+            .. session_label(current)
+        )
+      else
+        notify(
+          "Neovim working directory changed:\n"
+            .. tostring(previous_scope)
+            .. "\n→ "
+            .. current_scope
+            .. "\nThis directory is not linked to Pi. Use Space p p to link it."
+        )
+      end
+    end,
+  })
+end
+
 function M.setup(options)
   config = vim.tbl_deep_extend("force", vim.deepcopy(defaults), options or {})
   suggestion.configure({
@@ -853,6 +1075,8 @@ function M.setup(options)
     get_config = function()
       return config
     end,
+    current_scope_cwd = current_scope_cwd,
+    current_scope_epoch = current_scope_epoch,
     notify = notify,
     socket_request = socket_request,
     choose_suggestion_session = choose_suggestion_session,
@@ -861,6 +1085,7 @@ function M.setup(options)
   })
   register_commands()
   register_keymaps()
+  register_link_autocommands()
 end
 
 M._test = {
@@ -875,13 +1100,26 @@ M._test = {
   format_diagnostics = format_diagnostics,
   format_buffer = format_buffer,
   suggestion = suggestion._test,
-  set_selected_session = function(session)
-    selected_session = session
+  candidate_sessions = candidate_sessions,
+  session_label = session_label,
+  link_session = link_session,
+  link_generation = link_generation,
+  current_scope_epoch = current_scope_epoch,
+  get_linked_session = linked_session,
+  invalidate_session = invalidate_session,
+  set_selected_session = function(session, scope_cwd)
+    local scope = canonical_work_path(scope_cwd or vim.fn.getcwd())
+    linked_sessions[scope] = session
+    advance_link_generation(scope)
   end,
+  clear_link = clear_link,
   reset = function()
-    suggestion._test.reset()
+    suggestion.reset()
     config = vim.deepcopy(defaults)
-    selected_session = nil
+    linked_sessions = {}
+    link_generations = {}
+    scope_epoch = scope_epoch + 1
+    last_scope_cwd = current_scope_cwd()
   end,
 }
 

@@ -7,7 +7,13 @@ local pending = nil
 local preview = nil
 local preview_win = nil
 local preview_buf = nil
+local preview_source_win = nil
+local source_tab_buf = nil
+local entering_preview = false
+local invalidate_and_clear
 local serial = 0
+
+local SOURCE_TAB_DESC = "Accept visible Pi editor suggestion"
 
 local function cfg()
   return env.get_config()
@@ -88,6 +94,7 @@ local function capture_cursor_target(bufnr)
   end
   return {
     bufnr = bufnr,
+    winid = vim.api.nvim_get_current_win(),
     cursor_row = row - 1,
     cursor_col = cursor[2],
     start_row = row - 1,
@@ -150,6 +157,7 @@ local function capture_visual_target(bufnr)
 
   local target = {
     bufnr = bufnr,
+    winid = vim.api.nvim_get_current_win(),
     start_row = start_row,
     start_col = start_col,
     end_row = end_row,
@@ -243,6 +251,55 @@ local function request_path(base, session)
   return absolute
 end
 
+local function target_window(target)
+  if target.winid
+    and vim.api.nvim_win_is_valid(target.winid)
+    and vim.api.nvim_win_get_buf(target.winid) == target.bufnr
+  then
+    return target.winid
+  end
+  local winid = vim.fn.bufwinid(target.bufnr)
+  if winid and winid >= 0 and vim.api.nvim_win_is_valid(winid) then
+    return winid
+  end
+  return nil
+end
+
+local function remove_source_tab_mapping()
+  local bufnr = source_tab_buf
+  source_tab_buf = nil
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+  local ok, mapping = pcall(vim.api.nvim_buf_call, bufnr, function()
+    return vim.fn.maparg("<Tab>", "n", false, true)
+  end)
+  if ok and type(mapping) == "table" and mapping.buffer == 1 and mapping.desc == SOURCE_TAB_DESC then
+    pcall(vim.keymap.del, "n", "<Tab>", { buffer = bufnr })
+  end
+end
+
+local function install_source_tab_mapping(bufnr)
+  if cfg().accept_with_tab == false or not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+  local ok, existing = pcall(vim.api.nvim_buf_call, bufnr, function()
+    return vim.fn.maparg("<Tab>", "n", false, true)
+  end)
+  if ok and type(existing) == "table" and existing.buffer == 1 then
+    return
+  end
+  vim.keymap.set("n", "<Tab>", function()
+    S.accept()
+  end, {
+    buffer = bufnr,
+    silent = true,
+    nowait = true,
+    desc = SOURCE_TAB_DESC,
+  })
+  source_tab_buf = bufnr
+end
+
 local function close_preview_window()
   if preview_win and vim.api.nvim_win_is_valid(preview_win) then
     pcall(vim.api.nvim_win_close, preview_win, true)
@@ -252,13 +309,160 @@ local function close_preview_window()
   end
   preview_win = nil
   preview_buf = nil
+  preview_source_win = nil
 end
 
 local function clear_preview_ui(bufnr)
+  remove_source_tab_mapping()
   if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
     pcall(vim.api.nvim_buf_clear_namespace, bufnr, namespace, 0, -1)
   end
   close_preview_window()
+end
+
+local function return_to_source()
+  local target = preview and preview.base.target
+  local winid = preview_source_win
+  if (not winid or not vim.api.nvim_win_is_valid(winid)) and target then
+    winid = target_window(target)
+  end
+  if winid and winid >= 0 and vim.api.nvim_win_is_valid(winid) then
+    pcall(vim.api.nvim_set_current_win, winid)
+  end
+end
+
+local function wrapped_line_count(lines, width)
+  local count = 0
+  for _, line in ipairs(lines) do
+    local display_width = math.max(1, vim.fn.strdisplaywidth(line))
+    count = count + math.max(1, math.ceil(display_width / math.max(1, width)))
+  end
+  return count
+end
+
+local function preview_position(target, width, height, centered)
+  if centered then
+    return math.max(1, math.floor((vim.o.lines - height) / 2) - 1),
+      math.max(1, math.floor((vim.o.columns - width) / 2))
+  end
+  local winid = target_window(target)
+  if not winid then
+    return 1, math.max(1, math.floor((vim.o.columns - width) / 2))
+  end
+  local position = vim.fn.screenpos(winid, target.start_row + 1, target.start_col + 1)
+  if type(position) ~= "table" or not position.row or position.row <= 0 then
+    return 1, math.max(1, math.floor((vim.o.columns - width) / 2))
+  end
+  local col = math.max(1, math.min(position.col - 1, vim.o.columns - width - 2))
+  local room_below = vim.o.lines - position.row - 3
+  local row = room_below >= height + 2 and position.row or math.max(1, position.row - height - 2)
+  return row, col
+end
+
+local function open_preview_window(state, lines, options)
+  local max_width = math.max(24, vim.o.columns - 4)
+  local configured_width = math.max(24, tonumber(cfg().preview_width) or 92)
+  local longest = 1
+  for _, line in ipairs(lines) do
+    longest = math.max(longest, vim.fn.strdisplaywidth(line))
+  end
+  local width = math.min(max_width, configured_width, math.max(36, longest + 2))
+  local max_height = math.max(4, vim.o.lines - 6)
+  local configured_height = math.max(4, tonumber(cfg().preview_height) or 18)
+  local height = math.min(max_height, configured_height, math.max(4, wrapped_line_count(lines, width)))
+  local row, col = preview_position(state.base.target, width, height, options.centered)
+
+  preview_buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(preview_buf, 0, -1, false, lines)
+  vim.bo[preview_buf].buftype = "nofile"
+  vim.bo[preview_buf].bufhidden = "wipe"
+  vim.bo[preview_buf].swapfile = false
+  vim.bo[preview_buf].filetype = options.filetype or ""
+  vim.bo[preview_buf].modifiable = false
+
+  local title = string.format(" Pi %s · Space p v to inspect · Tab to accept ", options.label)
+  if vim.fn.strdisplaywidth(title) > width then
+    title = " Pi preview · Tab accept "
+  end
+  local ok, win = pcall(vim.api.nvim_open_win, preview_buf, false, {
+    relative = "editor",
+    style = "minimal",
+    border = "rounded",
+    title = title,
+    title_pos = "center",
+    width = width,
+    height = height,
+    row = row,
+    col = col,
+    focusable = false,
+    noautocmd = true,
+  })
+  if not ok then
+    pcall(vim.api.nvim_buf_delete, preview_buf, { force = true })
+    preview_buf = nil
+    return false
+  end
+
+  preview_win = win
+  preview_source_win = target_window(state.base.target)
+  vim.wo[preview_win].wrap = true
+  vim.wo[preview_win].linebreak = false
+  vim.wo[preview_win].breakindent = true
+  vim.wo[preview_win].cursorline = true
+  vim.wo[preview_win].number = false
+  vim.wo[preview_win].relativenumber = false
+
+  vim.keymap.set("n", "<Tab>", function()
+    S.accept()
+  end, { buffer = preview_buf, silent = true, nowait = true, desc = SOURCE_TAB_DESC })
+  vim.keymap.set("n", "j", "gj", {
+    buffer = preview_buf,
+    silent = true,
+    desc = "Move down one displayed preview line",
+  })
+  vim.keymap.set("n", "k", "gk", {
+    buffer = preview_buf,
+    silent = true,
+    desc = "Move up one displayed preview line",
+  })
+  vim.keymap.set("n", "q", return_to_source, {
+    buffer = preview_buf,
+    silent = true,
+    nowait = true,
+    desc = "Return to the Pi suggestion source",
+  })
+  vim.keymap.set("n", "<Esc>", return_to_source, {
+    buffer = preview_buf,
+    silent = true,
+    nowait = true,
+    desc = "Return to the Pi suggestion source",
+  })
+  return true
+end
+
+local function inline_available_width(target)
+  local winid = target_window(target)
+  if not winid then
+    return math.max(0, vim.o.columns - 8)
+  end
+  local position = vim.fn.screenpos(winid, target.start_row + 1, target.start_col + 1)
+  if type(position) ~= "table" or not position.col or position.col <= 0 then
+    return math.max(0, vim.api.nvim_win_get_width(winid) - 4)
+  end
+  local window_position = vim.api.nvim_win_get_position(winid)
+  local window_right = window_position[2] + vim.api.nvim_win_get_width(winid)
+  return math.max(0, window_right - position.col - 1)
+end
+
+local function inline_chunks(text)
+  if text == "" then
+    return { { "▏", "PiNvimContextInsertionPoint" } }
+  end
+  local first_bytes = utf8_character_bytes(text, 0)
+  return {
+    { text:sub(1, first_bytes), "PiNvimContextInsertionPoint" },
+    { text:sub(first_bytes + 1), "Comment" },
+  }
 end
 
 local function render_completion(state)
@@ -267,23 +471,46 @@ local function render_completion(state)
   if #lines == 0 then
     lines = { state.suggestion }
   end
-  local shown = math.min(#lines, cfg().max_preview_lines)
-  local virtual_lines = {}
-  for index = 2, shown do
-    table.insert(virtual_lines, { { lines[index], "Comment" } })
+  local needs_window = #lines > 1 or vim.fn.strdisplaywidth(lines[1] or "") > inline_available_width(target)
+  if not needs_window then
+    vim.api.nvim_buf_set_extmark(target.bufnr, namespace, target.start_row, target.start_col, {
+      virt_text = inline_chunks(lines[1] or ""),
+      virt_text_pos = "inline",
+      right_gravity = false,
+      priority = 200,
+    })
+    return false
   end
-  if #lines > shown then
-    table.insert(virtual_lines, { { string.format("… %d more Pi suggestion lines", #lines - shown), "DiagnosticHint" } })
-  end
+
   vim.api.nvim_buf_set_extmark(target.bufnr, namespace, target.start_row, target.start_col, {
     virt_text = {
-      { lines[1] or "", "Comment" },
-      { "  [Pi · <leader>pa accept · <leader>pn another · <leader>px dismiss]", "DiagnosticHint" },
+      { "▏", "PiNvimContextInsertionPoint" },
+      { " Pi insertion preview", "DiagnosticHint" },
     },
     virt_text_pos = "inline",
-    virt_lines = virtual_lines,
     right_gravity = false,
+    priority = 200,
   })
+  local opened = open_preview_window(state, lines, {
+    centered = false,
+    filetype = vim.bo[target.bufnr].filetype,
+    label = state.base.kind == "insertion" and "guided insertion" or "completion",
+  })
+  if not opened then
+    vim.api.nvim_buf_clear_namespace(target.bufnr, namespace, 0, -1)
+    local virtual_lines = {}
+    for index = 2, #lines do
+      table.insert(virtual_lines, { { lines[index], "Comment" } })
+    end
+    vim.api.nvim_buf_set_extmark(target.bufnr, namespace, target.start_row, target.start_col, {
+      virt_text = inline_chunks(lines[1] or ""),
+      virt_text_pos = "inline",
+      virt_lines = virtual_lines,
+      right_gravity = false,
+      priority = 200,
+    })
+  end
+  return opened
 end
 
 local function rewrite_diff(original, suggestion)
@@ -309,44 +536,15 @@ local function render_rewrite(state)
     end_right_gravity = true,
   })
 
-  preview_buf = vim.api.nvim_create_buf(false, true)
   local diff_lines = vim.split(rewrite_diff(target.original, state.suggestion), "\n", {
     plain = true,
     trimempty = false,
   })
-  vim.api.nvim_buf_set_lines(preview_buf, 0, -1, false, diff_lines)
-  vim.bo[preview_buf].buftype = "nofile"
-  vim.bo[preview_buf].bufhidden = "wipe"
-  vim.bo[preview_buf].swapfile = false
-  vim.bo[preview_buf].filetype = "diff"
-  vim.bo[preview_buf].modifiable = false
-
-  local width = math.max(30, math.min(cfg().rewrite_preview_width, vim.o.columns - 4))
-  local height = math.max(4, math.min(cfg().rewrite_preview_height, #diff_lines, vim.o.lines - 6))
-  local row = math.max(1, math.floor((vim.o.lines - height) / 2) - 1)
-  local col = math.max(1, math.floor((vim.o.columns - width) / 2))
-  local title = string.format(" Pi rewrite · %s · <leader>pa accept · <leader>px dismiss ", state.model_label)
-  local ok, win = pcall(vim.api.nvim_open_win, preview_buf, false, {
-    relative = "editor",
-    style = "minimal",
-    border = "rounded",
-    title = title,
-    title_pos = "center",
-    width = width,
-    height = height,
-    row = row,
-    col = col,
-    focusable = false,
-    noautocmd = true,
+  return open_preview_window(state, diff_lines, {
+    centered = true,
+    filetype = "diff",
+    label = "rewrite diff",
   })
-  if ok then
-    preview_win = win
-    vim.wo[preview_win].wrap = false
-    vim.wo[preview_win].cursorline = false
-  else
-    pcall(vim.api.nvim_buf_delete, preview_buf, { force = true })
-    preview_buf = nil
-  end
 end
 
 local function dismiss_copilot()
@@ -355,20 +553,52 @@ local function dismiss_copilot()
   end)
 end
 
+local function suggestion_kind_label(kind)
+  if kind == "rewrite" then
+    return "rewrite"
+  elseif kind == "insertion" then
+    return "guided insertion"
+  end
+  return "completion"
+end
+
 local function render_preview(state)
   clear_preview_ui(state.base.bufnr)
   dismiss_copilot()
+  local has_window
   if state.base.kind == "rewrite" then
-    render_rewrite(state)
+    has_window = render_rewrite(state)
   else
-    render_completion(state)
+    has_window = render_completion(state)
   end
+  install_source_tab_mapping(state.base.bufnr)
   notify(string.format(
-    "Pi %s ready (%s, thinking %s). Use <leader>pa to accept, <leader>pn for another, or <leader>px to dismiss.",
-    state.base.kind == "rewrite" and "rewrite" or "completion",
+    "Pi %s ready (%s, thinking %s). Use Normal Tab or Space p a to accept, Space p n for another, or Space p x to dismiss.%s",
+    suggestion_kind_label(state.base.kind),
     state.model_label,
-    state.thinking
+    state.thinking,
+    has_window and " Space p v opens the full scrollable preview." or ""
   ))
+end
+
+function S.focus_preview()
+  if not preview or not preview_win or not vim.api.nvim_win_is_valid(preview_win) then
+    notify("This Pi suggestion has no separate full preview", vim.log.levels.WARN, true)
+    return
+  end
+  if not target_is_current(preview.base.target) then
+    invalidate_and_clear(true)
+    notify("The buffer changed; request a fresh Pi suggestion", vim.log.levels.WARN, true)
+    return
+  end
+  entering_preview = true
+  local ok = pcall(vim.api.nvim_set_current_win, preview_win)
+  entering_preview = false
+  if not ok then
+    notify("The Pi suggestion preview is no longer available", vim.log.levels.WARN, true)
+    return
+  end
+  notify("Pi preview focused. Scroll normally; press Tab to accept or q to return to the source.")
 end
 
 local function replace_target(target, suggestion)
@@ -393,14 +623,14 @@ local function replace_target(target, suggestion)
   end
   local end_row = target.start_row + #replacement - 1
   local end_col = #replacement == 1 and target.start_col + #replacement[1] or #replacement[#replacement]
-  local winid = vim.fn.bufwinid(target.bufnr)
-  if winid and winid >= 0 and vim.api.nvim_win_is_valid(winid) then
+  local winid = target_window(target)
+  if winid then
     pcall(vim.api.nvim_win_set_cursor, winid, { end_row + 1, end_col })
   end
   return { row = end_row, col = end_col }
 end
 
-local function invalidate_and_clear(silent)
+invalidate_and_clear = function(silent)
   serial = serial + 1
   local had_state = pending ~= nil or preview ~= nil
   local bufnr = preview and preview.base.bufnr or (pending and pending.base.bufnr)
@@ -439,6 +669,7 @@ local function send_base(base, previous_suggestion, request_serial, retried)
     return
   end
 
+  local capability = base.kind == "insertion" and "guided-insertion" or "suggest"
   env.choose_suggestion_session(function(session)
     if request_serial ~= serial then
       return
@@ -469,8 +700,8 @@ local function send_base(base, previous_suggestion, request_serial, retried)
       path = base.absolute_path ~= "" and base.absolute_path or nil,
       previousSuggestion = previous_suggestion,
     }
-    local timeout = base.kind == "rewrite" and cfg().rewrite_timeout_ms or cfg().suggest_timeout_ms
-    notify(string.format("Generating Pi %s with %s…", base.kind == "rewrite" and "rewrite" or "completion", env.session_label(session)))
+    local timeout = base.kind == "completion" and cfg().suggest_timeout_ms or cfg().rewrite_timeout_ms
+    notify(string.format("Generating Pi %s with %s…", suggestion_kind_label(base.kind), env.session_label(session)))
 
     pending.session = session
     pending.cancel = nil
@@ -526,7 +757,7 @@ local function send_base(base, previous_suggestion, request_serial, retried)
       pending.cancel = cancel
       pending.session = session
     end
-  end)
+  end, capability)
 end
 
 local function begin_request(base, previous_suggestion)
@@ -551,6 +782,47 @@ function S.suggest()
   begin_request(base)
 end
 
+function S.suggest_guided()
+  local bufnr = current_buffer()
+  if not bufnr then
+    return
+  end
+  local scope_cwd = env.current_scope_cwd()
+  local scope_epoch = env.current_scope_epoch()
+  local prompt_serial = serial
+  local target = capture_cursor_target(bufnr)
+  vim.ui.input({ prompt = "Pi insertion instruction: " }, function(instruction)
+    instruction = type(instruction) == "string" and vim.trim(instruction) or ""
+    if instruction == "" then
+      notify("Pi guided insertion cancelled: no instruction was provided", vim.log.levels.WARN, true)
+      return
+    end
+    if env.current_scope_cwd() ~= scope_cwd or env.current_scope_epoch() ~= scope_epoch then
+      notify("Pi guided insertion cancelled because Neovim's working directory changed", vim.log.levels.WARN, true)
+      return
+    end
+    if serial ~= prompt_serial then
+      notify("Pi guided insertion cancelled because another suggestion superseded it", vim.log.levels.WARN, true)
+      return
+    end
+    if vim.api.nvim_get_current_buf() ~= bufnr or not target_is_current(target) then
+      notify("The insertion target changed before the request was prepared", vim.log.levels.WARN, true)
+      return
+    end
+    local current_target = capture_cursor_target(bufnr)
+    if current_target.start_row ~= target.start_row or current_target.start_col ~= target.start_col then
+      notify("The cursor moved before the guided insertion was requested", vim.log.levels.WARN, true)
+      return
+    end
+    local base, error_message = capture_snapshot(target, "insertion", instruction)
+    if not base then
+      notify(error_message, vim.log.levels.WARN, true)
+      return
+    end
+    begin_request(base)
+  end)
+end
+
 function S.rewrite()
   local bufnr = current_buffer()
   if not bufnr then
@@ -558,6 +830,7 @@ function S.rewrite()
   end
   local scope_cwd = env.current_scope_cwd()
   local scope_epoch = env.current_scope_epoch()
+  local prompt_serial = serial
   local target, target_error = capture_visual_target(bufnr)
   if not target then
     notify(target_error, vim.log.levels.WARN, true)
@@ -571,6 +844,10 @@ function S.rewrite()
     end
     if env.current_scope_cwd() ~= scope_cwd or env.current_scope_epoch() ~= scope_epoch then
       notify("Pi rewrite cancelled because Neovim's working directory changed", vim.log.levels.WARN, true)
+      return
+    end
+    if serial ~= prompt_serial then
+      notify("Pi rewrite cancelled because another suggestion superseded it", vim.log.levels.WARN, true)
       return
     end
     if not target_is_current(target) then
@@ -616,16 +893,28 @@ function S.accept()
     notify(error_message, vim.log.levels.WARN, true)
     return
   end
-  notify(string.format("Applied Pi %s as one Neovim edit", state.base.kind == "rewrite" and "rewrite" or "completion"))
+  notify(string.format("Applied Pi %s as one Neovim edit", suggestion_kind_label(state.base.kind)))
+end
+
+local function define_highlights()
+  pcall(vim.api.nvim_set_hl, 0, "PiNvimContextInsertionPoint", {
+    default = true,
+    link = "IncSearch",
+  })
 end
 
 local function register_autocommands()
   local group = vim.api.nvim_create_augroup("PiNvimContextSuggestion", { clear = true })
+  vim.api.nvim_create_autocmd("ColorScheme", {
+    group = group,
+    callback = define_highlights,
+  })
   vim.api.nvim_create_autocmd({
     "TextChanged",
     "TextChangedI",
     "CursorMoved",
     "CursorMovedI",
+    "BufEnter",
     "BufLeave",
     "BufUnload",
     "BufWipeout",
@@ -633,11 +922,27 @@ local function register_autocommands()
     group = group,
     callback = function(args)
       local base = preview and preview.base or (pending and pending.base)
-      if not base or args.buf ~= base.bufnr then
+      if not base then
+        return
+      end
+      if args.event == "BufEnter" then
+        if args.buf ~= base.bufnr and args.buf ~= preview_buf then
+          invalidate_and_clear(true)
+        end
+        return
+      end
+      if args.buf == preview_buf and (args.event == "BufUnload" or args.event == "BufWipeout") then
+        invalidate_and_clear(true)
+        return
+      end
+      if args.buf ~= base.bufnr then
+        return
+      end
+      if args.event == "BufLeave" and entering_preview then
         return
       end
       local cursor_departed = (args.event == "CursorMoved" or args.event == "CursorMovedI")
-        and base.kind == "completion"
+        and base.kind ~= "rewrite"
       if cursor_departed
         or args.event == "BufLeave"
         or args.event == "BufUnload"
@@ -652,6 +957,7 @@ end
 
 function S.configure(dependencies)
   env = dependencies
+  define_highlights()
   register_autocommands()
 end
 
@@ -665,6 +971,15 @@ S._test = {
   replace_target = replace_target,
   get_state = function()
     return { pending = pending, preview = preview }
+  end,
+  get_ui_state = function()
+    return {
+      namespace = namespace,
+      preview_win = preview_win,
+      preview_buf = preview_buf,
+      preview_source_win = preview_source_win,
+      source_tab_buf = source_tab_buf,
+    }
   end,
   reset = S.reset,
 }

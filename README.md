@@ -3,7 +3,7 @@
 Connect Neovim to a **standalone Pi session** for two deliberate workflows:
 
 1. Gather visible, editable context in Pi's input without submitting it.
-2. Ask the active Pi model for an explicit cursor completion or selection rewrite without starting a Pi agent turn.
+2. Ask the active Pi model for an explicit cursor completion, instruction-guided insertion, or selection rewrite without starting a Pi agent turn.
 
 Copilot can keep owning automatic Insert-mode completion and `Tab`; Pi is invoked only through explicit mappings.
 
@@ -21,9 +21,11 @@ Repeated mappings accumulate context in Pi's input editor. Switch to Pi when rea
 
 ### Direct editor suggestions
 
-- short completion at the cursor, shown as Neovim virtual text
-- instruction-driven visual-selection rewrite, shown as a non-focused diff
-- regenerate, accept, cancel, and dismiss actions
+- short completion at the cursor, shown as Neovim virtual text at the exact insertion boundary
+- instruction-guided insertion at the cursor
+- instruction-driven visual-selection rewrite
+- wrapping full previews for multiline or wide insertions and rewrite diffs
+- regenerate, inspect, accept, cancel, and dismiss actions
 - exact `changedtick`, target-range, and original-text validation
 - one undoable Neovim edit on acceptance
 - no automatic save or buffer reload
@@ -87,10 +89,15 @@ The mappings assume Space is already configured as `<leader>`.
 | Mapping | Action |
 |---|---|
 | `Space p c` | Ask Pi for a completion after the Normal-mode cursor character |
+| `Space p g` | Enter an instruction and ask Pi to insert text at that position |
 | Visual `Space p r` | Enter an instruction and ask Pi to rewrite the selection |
-| `Space p a` | Accept the visible Pi completion or rewrite |
+| Normal `Tab` | Accept while a Pi result is visible; otherwise retain normal Vim behavior |
+| `Space p a` | Accept the visible Pi completion, insertion, or rewrite |
 | `Space p n` | Generate a materially different result |
+| `Space p v` | Focus a full preview so it can be scrolled; `q` returns to the source |
 | `Space p x` | Cancel or dismiss the Pi request/result |
+
+Bare `Space p` is a harmless prefix mapping. If the sequence times out before a final key, Neovim no longer reinterprets it as native Normal-mode movement and paste commands.
 
 Corresponding commands are:
 
@@ -103,26 +110,31 @@ Corresponding commands are:
 :PiContextBuffer
 :PiContextStatus
 :PiSuggest
+:PiSuggestGuided
 :PiRewrite
 :PiSuggestAccept
 :PiSuggestAgain
 :PiSuggestDismiss
+:PiSuggestPreview
 ```
 
 ## Copilot coexistence
 
-`pi-nvim-context` does not map `Tab` or modify Copilot's acceptance mappings. When an explicit Pi request starts, it asks `copilot.vim` to dismiss any currently visible Copilot suggestion, so the previews do not overlap.
+`pi-nvim-context` never modifies Insert-mode `Tab`, so Copilot keeps its normal acceptance mapping. While a Pi result is visible, the plugin temporarily installs a buffer-local **Normal-mode** `Tab` mapping; accepting or dismissing the result removes it. When an explicit Pi request starts, it also asks `copilot.vim` to dismiss any currently visible Copilot suggestion, so the previews do not overlap.
 
 A practical division of labour is:
 
 - **Copilot:** automatic, low-latency Insert-mode completion and `Tab` acceptance.
-- **Pi completion:** explicit, short completion with the active Pi model and thinking off.
-- **Pi rewrite:** explicit selected-range edit with the instruction you enter and low thinking when the model supports reasoning.
+- **Pi completion:** explicit, short continuation with the active Pi model and thinking off.
+- **Pi guided insertion:** explicit cursor insertion following the instruction you enter, with low thinking when supported.
+- **Pi rewrite:** explicit selected-range edit following your instruction, with low thinking when supported.
 - **Full Pi agent:** whole-file, multi-file, tool-using, or autonomous work.
 
 ## Direct-suggestion context and model use
 
-Cursor completions send up to 12,000 characters before and 6,000 after the cursor. Rewrites additionally send the exact selected text and your instruction. Prefix, selection, and suffix are sent as separate strings, avoiding UTF-8 byte versus JavaScript UTF-16 offset errors.
+Cursor completions send up to 12,000 characters before and 6,000 after the cursor. Guided insertions additionally send your instruction; rewrites send the exact selected text and your instruction. Prefix, selection, and suffix are sent as separate strings, avoiding UTF-8 byte versus JavaScript UTF-16 offset errors.
+
+Guided insertions do not use tools or search external sources. If an instruction asks for references, supply the needed bibliographic details or use the full Pi agent to research and verify them.
 
 Direct suggestions:
 
@@ -166,11 +178,12 @@ require("pi-nvim-context").setup({
   suggest_prefix_chars = 12 * 1000,
   suggest_suffix_chars = 6 * 1000,
   max_rewrite_bytes = 100 * 1024,
-  max_preview_lines = 12,
-  rewrite_preview_width = 92,
-  rewrite_preview_height = 18,
+  preview_width = 92,
+  preview_height = 18,
+  accept_with_tab = true,
 
   keymaps = {
+    prefix = "<leader>p", -- harmless exact mapping protects an incomplete prefix
     pick = "<leader>pp",
     file = "<leader>pf",
     location = "<leader>pl",
@@ -179,15 +192,17 @@ require("pi-nvim-context").setup({
     buffer = "<leader>pb",
     status = "<leader>pi",
     suggest = "<leader>pc",
+    guided = "<leader>pg",
     rewrite = "<leader>pr",
     accept = "<leader>pa",
     again = "<leader>pn",
     dismiss = "<leader>px",
+    preview = "<leader>pv",
   },
 })
 ```
 
-Set an individual mapping to `false`, or set `keymaps = false` and map the Lua functions yourself.
+Set an individual mapping to `false`, or set `keymaps = false` and map the Lua functions yourself. Set `accept_with_tab = false` to keep Normal-mode `Tab` untouched. If a source buffer already has its own buffer-local Normal `Tab` mapping, the plugin preserves it and `Space p a` remains available.
 
 ## Behavior and safety
 
@@ -214,4 +229,4 @@ npm run typecheck
 npm test
 ```
 
-Tests cover the private socket lifecycle, direct completion and rewrite requests, Pi-input isolation, stale-session cleanup, Unicode-safe Neovim ranges, formatting, truncation, commands, and mappings.
+Tests cover the private socket lifecycle, completion, guided-insertion and rewrite requests, Pi-input isolation, stale-session cleanup, Unicode-safe Neovim ranges, full previews, temporary acceptance mappings, formatting, truncation, commands, and mappings.

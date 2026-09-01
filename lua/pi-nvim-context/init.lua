@@ -17,10 +17,11 @@ local defaults = {
   suggest_prefix_chars = 12 * 1000,
   suggest_suffix_chars = 6 * 1000,
   max_rewrite_bytes = 100 * 1024,
-  max_preview_lines = 12,
-  rewrite_preview_width = 92,
-  rewrite_preview_height = 18,
+  preview_width = 92,
+  preview_height = 18,
+  accept_with_tab = true,
   keymaps = {
+    prefix = "<leader>p",
     pick = "<leader>pp",
     file = "<leader>pf",
     location = "<leader>pl",
@@ -29,10 +30,12 @@ local defaults = {
     buffer = "<leader>pb",
     status = "<leader>pi",
     suggest = "<leader>pc",
+    guided = "<leader>pg",
     rewrite = "<leader>pr",
     accept = "<leader>pa",
     again = "<leader>pn",
     dismiss = "<leader>px",
+    preview = "<leader>pv",
   },
 }
 
@@ -434,15 +437,17 @@ local function choose_session(force_picker, callback, capability)
     local candidates = candidate_sessions(sessions, force_picker, capability, requested_scope)
     if #candidates == 0 then
       if force_picker then
+        local message = "No running Pi context bridge was found. Restart Pi after installing pi-nvim-context."
+        if capability == "suggest" then
+          message = "No running Pi session with suggestion support was found. Restart Pi after updating pi-nvim-context."
+        elseif capability == "guided-insertion" then
+          message = "No running Pi session with guided-insertion support was found. Restart Pi after updating pi-nvim-context."
+        end
+        notify(message, vim.log.levels.WARN)
+      elseif capability == "suggest" or capability == "guided-insertion" then
+        local feature = capability == "guided-insertion" and "guided-insertion" or "suggestion"
         notify(
-          capability == "suggest"
-              and "No running Pi session with suggestion support was found. Restart Pi after updating pi-nvim-context."
-            or "No running Pi context bridge was found. Restart Pi after installing pi-nvim-context.",
-          vim.log.levels.WARN
-        )
-      elseif capability == "suggest" then
-        notify(
-          "No bridge-enabled Pi session with suggestion support matches this Neovim working directory:\n"
+          "No bridge-enabled Pi session with " .. feature .. " support matches this Neovim working directory:\n"
             .. requested_scope
             .. "\nRestart Pi there after updating pi-nvim-context, or use Space p p to explicitly link a different session.",
           vim.log.levels.WARN
@@ -468,19 +473,20 @@ local function choose_session(force_picker, callback, capability)
       prompt,
       requested_scope,
       requested_generation,
-      capability == "suggest",
+      capability ~= nil,
       requested_scope_epoch
     )
   end)
 end
 
-local function choose_suggestion_session(callback)
-  local current = linked_session("suggest")
+local function choose_suggestion_session(callback, capability)
+  capability = capability or "suggest"
+  local current = linked_session(capability)
   if current then
     callback(current)
     return
   end
-  choose_session(false, callback, "suggest")
+  choose_session(false, callback, capability)
 end
 
 same_session = function(first, second)
@@ -921,10 +927,12 @@ function M.add_buffer()
 end
 
 M.suggest = suggestion.suggest
+M.suggest_guided = suggestion.suggest_guided
 M.rewrite = suggestion.rewrite
 M.accept_suggestion = suggestion.accept
 M.suggest_again = suggestion.again
 M.dismiss_suggestion = suggestion.dismiss
+M.focus_suggestion_preview = suggestion.focus_preview
 
 function M.status()
   local sessions = scan_sessions()
@@ -983,10 +991,12 @@ local command_definitions = {
   PiContextBuffer = { M.add_buffer, "Add the current buffer to Pi's input" },
   PiContextStatus = { M.status, "Show Pi context bridge status" },
   PiSuggest = { M.suggest, "Ask Pi for an explicit completion at the cursor" },
+  PiSuggestGuided = { M.suggest_guided, "Ask Pi for an instruction-guided insertion at the cursor" },
   PiRewrite = { M.rewrite, "Ask Pi to rewrite the visual selection" },
   PiSuggestAccept = { M.accept_suggestion, "Accept the pending Pi editor suggestion" },
   PiSuggestAgain = { M.suggest_again, "Generate another Pi editor suggestion" },
   PiSuggestDismiss = { M.dismiss_suggestion, "Cancel or dismiss the Pi editor suggestion" },
+  PiSuggestPreview = { M.focus_suggestion_preview, "Focus the full Pi editor suggestion preview" },
 }
 
 local function register_commands()
@@ -1004,6 +1014,12 @@ local function register_keymaps()
     return
   end
   local keymaps = config.keymaps or {}
+  if keymaps.prefix and keymaps.prefix ~= false then
+    vim.keymap.set({ "n", "x" }, keymaps.prefix, "<Nop>", {
+      silent = true,
+      desc = "Pi context mapping prefix",
+    })
+  end
   local normal = {
     pick = { M.pick, "Select Pi context target" },
     file = { M.add_file, "Add current file to Pi" },
@@ -1012,9 +1028,11 @@ local function register_keymaps()
     buffer = { M.add_buffer, "Add current buffer to Pi" },
     status = { M.status, "Show Pi context status" },
     suggest = { M.suggest, "Request Pi completion at cursor" },
+    guided = { M.suggest_guided, "Request guided Pi insertion at cursor" },
     accept = { M.accept_suggestion, "Accept Pi editor suggestion" },
     again = { M.suggest_again, "Try another Pi editor suggestion" },
     dismiss = { M.dismiss_suggestion, "Dismiss Pi editor suggestion" },
+    preview = { M.focus_suggestion_preview, "Focus full Pi suggestion preview" },
   }
   for name, mapping in pairs(normal) do
     local lhs = keymaps[name]

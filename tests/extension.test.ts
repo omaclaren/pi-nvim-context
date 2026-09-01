@@ -124,7 +124,11 @@ test("Pi bridge exposes a private socket and prefills without submitting", async
 				role: "assistant",
 				content: [{
 					type: "text",
-					text: prompt.includes("<edit_instruction>") ? "A clearer replacement." : " natural continuation",
+					text: prompt.includes("<edit_instruction>")
+						? "A clearer replacement."
+						: prompt.includes("<insert_instruction>")
+							? " A guided insertion."
+							: " natural continuation",
 				}],
 				stopReason: "stop",
 				timestamp: Date.now(),
@@ -163,7 +167,7 @@ test("Pi bridge exposes a private socket and prefills without submitting", async
 		};
 
 		assert.equal(manifest.protocol, PROTOCOL_VERSION);
-		assert.deepEqual(manifest.capabilities, ["prefill", "suggest"]);
+		assert.deepEqual(manifest.capabilities, ["prefill", "suggest", "guided-insertion"]);
 		assert.equal(manifest.cwd, mock.context.cwd);
 		assert.equal(manifest.sessionName, "Bridge test");
 		assert.equal((await stat(runtimeDirectory)).mode & 0o777, 0o700);
@@ -204,6 +208,40 @@ test("Pi bridge exposes a private socket and prefills without submitting", async
 		assert.match(completionCalls[0].prompt, /A sentence that needs⟦CURSOR⟧\./);
 		assert.deepEqual(mock.pastes, [], "direct suggestions do not alter Pi's input editor");
 
+		const insertion = await request(manifest.socketPath, {
+			protocol: PROTOCOL_VERSION,
+			type: "suggest",
+			requestId: "insertion-1",
+			kind: "insertion",
+			prefix: "This discussion needs",
+			selection: "",
+			suffix: " before the conclusion.",
+			instruction: "Add a reference to the named book.",
+			language: "markdown",
+			label: "notes.md",
+		});
+		assert.equal(insertion.ok, true);
+		assert.equal(insertion.suggestion, " A guided insertion.");
+		assert.equal(insertion.thinking, "low");
+		assert.equal(completionCalls[1].options.reasoning, "low");
+		assert.equal(completionCalls[1].options.maxTokens, 4_000);
+		assert.match(completionCalls[1].prompt, /<insert_instruction>\nAdd a reference to the named book\./);
+		assert.match(completionCalls[1].prompt, /This discussion needs⟦CURSOR⟧ before the conclusion\./);
+		assert.deepEqual(mock.pastes, [], "guided insertions do not alter Pi's input editor");
+
+		const invalidInsertion = await request(manifest.socketPath, {
+			protocol: PROTOCOL_VERSION,
+			type: "suggest",
+			requestId: "insertion-invalid",
+			kind: "insertion",
+			prefix: "Before",
+			selection: "",
+			suffix: " after",
+		});
+		assert.equal(invalidInsertion.ok, false);
+		assert.match(String(invalidInsertion.error), /Insertion instruction is empty/);
+		assert.equal(completionCalls.length, 2, "invalid insertions do not call the model");
+
 		const rewrite = await request(manifest.socketPath, {
 			protocol: PROTOCOL_VERSION,
 			type: "suggest",
@@ -219,8 +257,8 @@ test("Pi bridge exposes a private socket and prefills without submitting", async
 		assert.equal(rewrite.ok, true);
 		assert.equal(rewrite.suggestion, "A clearer replacement.");
 		assert.equal(rewrite.thinking, "low");
-		assert.equal(completionCalls[1].options.reasoning, "low");
-		assert.match(completionCalls[1].prompt, /<edit_instruction>\nMake this clearer\./);
+		assert.equal(completionCalls[2].options.reasoning, "low");
+		assert.match(completionCalls[2].prompt, /<edit_instruction>\nMake this clearer\./);
 		assert.deepEqual(mock.pastes, [], "rewrites do not alter Pi's input editor");
 
 		mock.setIdle(false);

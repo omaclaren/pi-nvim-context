@@ -46,7 +46,7 @@ local exact_session = {
   sessionId = "exact-session",
   pid = 101,
   socketPath = "/tmp/exact-session.sock",
-  capabilities = { "prefill", "suggest" },
+  capabilities = { "prefill", "suggest", "guided-insertion" },
 }
 local other_session = {
   cwd = project,
@@ -61,6 +61,7 @@ equal(automatic_candidates[1], exact_session, "automatic linking keeps the exact
 equal(#test.candidate_sessions({ other_session }, false), 0, "automatic linking never falls back across directories")
 equal(#test.candidate_sessions({ other_session, exact_session }, true), 2, "the explicit picker offers cross-directory sessions")
 equal(#test.candidate_sessions({ other_session, exact_session }, true, "suggest"), 1, "capability filtering excludes outdated bridges")
+equal(#test.candidate_sessions({ other_session, exact_session }, true, "guided-insertion"), 1, "guided insertion requires a current bridge")
 matches(test.session_label(exact_session), "✓ exact cwd", "picker labels exact-cwd sessions")
 matches(test.session_label(other_session), "⚠ different cwd", "picker warns about cross-directory sessions")
 matches(test.session_label(other_session, project), "✓ exact cwd", "async labels stay relative to their captured cwd")
@@ -152,6 +153,7 @@ matches(buffer_context, "# Notes", "buffer context includes in-memory contents")
 context.setup({
   notify = false,
   keymaps = {
+    prefix = "<F5>",
     pick = "<F6>",
     file = false,
     location = false,
@@ -161,6 +163,8 @@ context.setup({
     status = false,
     suggest = "<F8>",
     rewrite = "<F9>",
+    guided = "<F10>",
+    preview = "<F11>",
     accept = false,
     again = false,
     dismiss = false,
@@ -168,11 +172,17 @@ context.setup({
 })
 equal(vim.fn.exists(":PiContextPick"), 2, "setup registers commands")
 equal(vim.fn.exists(":PiSuggest"), 2, "setup registers Pi suggestion commands")
+equal(vim.fn.exists(":PiSuggestGuided"), 2, "setup registers guided-insertion commands")
+equal(vim.fn.exists(":PiSuggestPreview"), 2, "setup registers full-preview commands")
 equal(vim.fn.exists(":PiRewrite"), 2, "setup registers Pi rewrite commands")
+equal(vim.fn.maparg("<F5>", "n"), "<Nop>", "setup protects an incomplete Pi mapping prefix")
+equal(vim.fn.maparg("<F5>", "x"), "<Nop>", "visual-mode Pi prefixes are protected too")
 equal(vim.fn.maparg("<F6>", "n") ~= "", true, "setup registers normal mappings")
 equal(vim.fn.maparg("<F7>", "x") ~= "", true, "setup registers visual mappings")
 equal(vim.fn.maparg("<F8>", "n") ~= "", true, "setup registers cursor-suggestion mappings")
 equal(vim.fn.maparg("<F9>", "x") ~= "", true, "setup registers rewrite mappings")
+equal(vim.fn.maparg("<F10>", "n") ~= "", true, "setup registers guided-insertion mappings")
+equal(vim.fn.maparg("<F11>", "n") ~= "", true, "setup registers full-preview mappings")
 test.set_selected_session(exact_session, original_cwd)
 local original_notify = vim.notify
 vim.notify = function() end
@@ -230,9 +240,9 @@ local suggestion_config = {
   suggest_prefix_chars = 12000,
   suggest_suffix_chars = 6000,
   max_rewrite_bytes = 100 * 1024,
-  max_preview_lines = 12,
-  rewrite_preview_width = 80,
-  rewrite_preview_height = 12,
+  preview_width = 80,
+  preview_height = 12,
+  accept_with_tab = true,
 }
 suggest_module.configure({
   protocol = 1,
@@ -255,7 +265,14 @@ suggest_module.configure({
   end,
   socket_request = function(_, payload, callback)
     table.insert(sent_requests, payload)
-    local response_text = #sent_requests == 1 and " now" or " instead"
+    local response_text
+    if payload.kind == "insertion" then
+      response_text = " with a reference to the book.\nA second sentence explains why it matters."
+    elseif payload.prefix:match("Wide preview$") then
+      response_text = string.rep("long suggestion text ", 20)
+    else
+      response_text = #sent_requests == 1 and " now" or " instead"
+    end
     vim.schedule(function()
       callback(nil, {
         ok = true,
@@ -273,6 +290,17 @@ suggest_module.suggest()
 equal(vim.wait(1000, function()
   return suggest_module._test.get_state().preview ~= nil
 end, 10), true, "cursor suggestions reach preview state asynchronously")
+local short_ui = suggest_module._test.get_ui_state()
+equal(short_ui.preview_win, nil, "short one-line suggestions remain inline at the insertion target")
+local short_marks = vim.api.nvim_buf_get_extmarks(edit_buf, short_ui.namespace, 0, -1, { details = true })
+equal(#short_marks, 1, "an inline suggestion uses one insertion extmark")
+equal({ short_marks[1][2], short_marks[1][3] }, { 0, #"Complete this" }, "the ghost text starts at the accepted insertion byte")
+local short_virtual_text = short_marks[1][4].virt_text
+equal(short_virtual_text[1][2], "PiNvimContextInsertionPoint", "the first inserted cell marks the exact boundary")
+equal(short_virtual_text[1][1] .. short_virtual_text[2][1], " now", "inline controls do not obscure the suggested text")
+local tab_mapping = vim.fn.maparg("<Tab>", "n", false, true)
+equal(tab_mapping.buffer, 1, "a visible Pi result temporarily installs a buffer-local Normal Tab mapping")
+equal(tab_mapping.desc, "Accept visible Pi editor suggestion", "the temporary Tab mapping is identifiable")
 equal(sent_requests[1].prefix, "Complete this", "cursor suggestion sends context through the cursor")
 suggest_module.again()
 equal(vim.wait(1000, function()
@@ -282,10 +310,60 @@ end, 10), true, "suggestion regeneration replaces the preview")
 equal(sent_requests[2].previousSuggestion, " now", "regeneration sends the previous result")
 suggest_module.accept()
 equal(vim.api.nvim_get_current_line(), "Complete this instead", "accept applies the visible suggestion")
+equal(vim.fn.maparg("<Tab>", "n"), "", "accepting a Pi result restores normal Tab behavior")
 vim.cmd("undo")
 equal(vim.api.nvim_get_current_line(), "Complete this", "an accepted suggestion is one undoable Neovim change")
 vim.cmd("redo")
 equal(vim.api.nvim_get_current_line(), "Complete this instead", "an accepted suggestion can be redone as one change")
+
+local guided_input_callback
+local guided_original_ui_input = vim.ui.input
+vim.ui.input = function(options, callback)
+  equal(options.prompt, "Pi insertion instruction: ", "guided insertion uses a dedicated instruction prompt")
+  guided_input_callback = callback
+end
+vim.api.nvim_win_set_cursor(0, { 1, #vim.api.nvim_get_current_line() - 1 })
+local guided_source_win = vim.api.nvim_get_current_win()
+suggest_module.suggest_guided()
+guided_input_callback("add references to the book")
+equal(vim.wait(1000, function()
+  local state = suggest_module._test.get_state()
+  return #sent_requests == 3 and state.preview and state.preview.base.kind == "insertion"
+end, 10), true, "guided insertions reach preview state asynchronously")
+equal(sent_requests[3].kind, "insertion", "guided insertion uses its distinct request kind")
+equal(sent_requests[3].instruction, "add references to the book", "guided insertion sends the entered instruction")
+local guided_ui = suggest_module._test.get_ui_state()
+equal(vim.api.nvim_win_is_valid(guided_ui.preview_win), true, "multiline insertions get a full preview window")
+equal(vim.wo[guided_ui.preview_win].wrap, true, "full suggestion previews wrap long lines")
+equal(vim.api.nvim_win_get_config(guided_ui.preview_win).focusable, false, "the preview does not steal focus when it opens")
+equal(vim.api.nvim_buf_get_lines(guided_ui.preview_buf, 0, -1, false), {
+  " with a reference to the book.",
+  "A second sentence explains why it matters.",
+}, "the full preview retains every suggestion line")
+suggest_module.focus_preview()
+equal(vim.api.nvim_get_current_buf(), guided_ui.preview_buf, "the full preview can be focused explicitly for scrolling")
+vim.api.nvim_set_current_win(guided_source_win)
+equal(suggest_module._test.get_state().preview ~= nil, true, "returning from the full preview keeps the suggestion active")
+suggest_module.accept()
+equal(vim.api.nvim_buf_get_lines(edit_buf, 0, 2, false), {
+  "Complete this instead with a reference to the book.",
+  "A second sentence explains why it matters.",
+}, "accepting a guided insertion applies its complete multiline result")
+vim.cmd("undo")
+equal(vim.api.nvim_get_current_line(), "Complete this instead", "a guided insertion is one undoable edit")
+vim.ui.input = guided_original_ui_input
+
+vim.api.nvim_buf_set_lines(edit_buf, 0, -1, false, { "Wide preview" })
+vim.api.nvim_win_set_cursor(0, { 1, #"Wide preview" - 1 })
+suggest_module.suggest()
+equal(vim.wait(1000, function()
+  local state = suggest_module._test.get_state()
+  return #sent_requests == 4 and state.preview ~= nil
+end, 10), true, "wide single-line suggestions reach preview state")
+local wide_ui = suggest_module._test.get_ui_state()
+equal(vim.api.nvim_win_is_valid(wide_ui.preview_win), true, "wide single-line suggestions use a wrapping full preview")
+equal(vim.api.nvim_buf_get_lines(wide_ui.preview_buf, 0, -1, false)[1], string.rep("long suggestion text ", 20), "wide previews retain unclipped text")
+suggest_module.dismiss()
 
 local rewrite_input_callback
 local original_ui_input = vim.ui.input

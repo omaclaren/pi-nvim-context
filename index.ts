@@ -179,7 +179,7 @@ function manifestFor(runtime: BridgeRuntime, pi: ExtensionAPI): BridgeManifest {
 	const sessionFile = runtime.ctx.sessionManager.getSessionFile();
 	return {
 		protocol: PROTOCOL_VERSION,
-		capabilities: ["prefill", "suggest"],
+		capabilities: ["prefill", "suggest", "guided-insertion"],
 		socketPath: runtime.socketPath,
 		pid: process.pid,
 		cwd: runtime.ctx.cwd,
@@ -243,7 +243,9 @@ async function handleSuggestionRequest(
 	const requestId = requestString(message.requestId, "Suggestion request ID", 128);
 	if (!/^[A-Za-z0-9._:-]+$/.test(requestId)) throw new Error("Suggestion request ID is invalid");
 	const kind = message.kind;
-	if (kind !== "completion" && kind !== "rewrite") throw new Error("Suggestion kind must be completion or rewrite");
+	if (kind !== "completion" && kind !== "insertion" && kind !== "rewrite") {
+		throw new Error("Suggestion kind must be completion, insertion, or rewrite");
+	}
 	if (runtime.activeSuggestions.has(requestId)) throw new Error("Suggestion request ID is already active");
 	if (runtime.activeSuggestions.size >= 2) throw new Error("Too many Pi editor suggestions are already running");
 	if (!runtime.ctx.isIdle()) throw new Error("Pi is busy; wait for the current agent turn to finish");
@@ -253,7 +255,7 @@ async function handleSuggestionRequest(
 	const suffix = requestString(message.suffix, "Suggestion suffix");
 	const instruction = message.instruction === undefined
 		? undefined
-		: requestString(message.instruction, "Rewrite instruction", MAX_SUGGESTION_INSTRUCTION_CHARS);
+		: requestString(message.instruction, "Suggestion instruction", MAX_SUGGESTION_INSTRUCTION_CHARS);
 	if (Buffer.byteLength(selection, "utf8") > MAX_SUGGESTION_SELECTION_BYTES) {
 		throw new Error(`Suggestion selection exceeds ${MAX_SUGGESTION_SELECTION_BYTES} bytes`);
 	}
@@ -261,7 +263,7 @@ async function handleSuggestionRequest(
 	const controller = new AbortController();
 	const active: ActiveSuggestion = { controller, socket };
 	runtime.activeSuggestions.set(requestId, active);
-	socket.setTimeout((kind === "rewrite" ? REWRITE_TIMEOUT_MS : COMPLETION_TIMEOUT_MS) + 10_000);
+	socket.setTimeout((kind === "completion" ? COMPLETION_TIMEOUT_MS : REWRITE_TIMEOUT_MS) + 10_000);
 
 	try {
 		const result = await runEditorSuggestion(runtime.ctx, {

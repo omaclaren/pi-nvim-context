@@ -1,0 +1,80 @@
+name: Bug report
+description: Report a reproducible problem with the Pi extension or Neovim plugin
+title: "bug: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Please remove credentials, private file contents, and other sensitive data from logs before posting them.
+
+  - type: input
+    id: pi-version
+    attributes:
+      label: Pi version
+      description: Output of `pi --version`.
+      placeholder: 0.84.4
+    validations:
+      required: true
+
+  - type: input
+    id: nvim-version
+    attributes:
+      label: Neovim version
+      description: First line of `nvim --version`.
+      placeholder: NVIM v0.11.0
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system
+      placeholder: macOS 15 or Ubuntu 24.04
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-source
+    attributes:
+      label: Installation source
+      options:
+        - GitHub through `pi install`
+        - Local checkout
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Include what you expected and what happened instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: List the commands, mappings, and configuration needed to reproduce the problem.
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Include relevant output from `/nvim-context`, `:PiContextStatus`, and `:messages`. Redact sensitive data.
+      render: text
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I fully restarted Pi and Neovim after updating both halves.
+          required: true
+        - label: I checked that Pi and Neovim use the intended working directory.
+          required: true
+        - label: I removed credentials and private content from this report.
+          required: true

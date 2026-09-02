@@ -1,3 +1,5 @@
 node_modules/
 *.log
+*.studio.pdf
+*.tgz
 .DS_Store

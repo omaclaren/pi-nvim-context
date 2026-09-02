@@ -5,11 +5,26 @@
   "type": "module",
   "private": true,
   "license": "MIT",
+  "author": "Oliver Maclaren",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/omaclaren/pi-nvim-context.git"
+  },
+  "homepage": "https://github.com/omaclaren/pi-nvim-context#readme",
+  "bugs": {
+    "url": "https://github.com/omaclaren/pi-nvim-context/issues"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "keywords": [
     "pi-package",
     "pi-extension",
     "neovim",
-    "editor-context"
+    "editor-context",
+    "coding-agent",
+    "lua",
+    "ai"
   ],
   "files": [
     "index.ts",
@@ -26,18 +41,18 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.84.4"
-  },
-  "dependencies": {
-    "@earendil-works/pi-ai": "^0.84.4"
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
   },
   "scripts": {
     "test": "npm run test:extension && npm run test:nvim",
     "test:extension": "node --import tsx --test tests/extension.test.ts",
     "test:nvim": "nvim --headless -u NONE -l tests/nvim_test.lua",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm test && npm run typecheck"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "^0.84.4",
     "@earendil-works/pi-coding-agent": "^0.84.4",
     "@types/node": "^24.3.0",
     "tsx": "^4.20.6",

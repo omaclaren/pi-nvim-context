@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: ${{ matrix.os }} / Neovim ${{ matrix.neovim }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            neovim: v0.11.0
+          - os: ubuntu-latest
+            neovim: stable
+          - os: macos-latest
+            neovim: stable
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+
+      - name: Set up Neovim
+        uses: rhysd/action-setup-vim@febef33995d6649302e9d88dda81e071b68f16a7 # v1
+        with:
+          neovim: true
+          version: ${{ matrix.neovim }}
+
+      - name: Show tool versions
+        run: |
+          node --version
+          npm --version
+          nvim --version | head -n 1
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Audit dependencies
+        if: matrix.os == 'ubuntu-latest' && matrix.neovim == 'stable'
+        run: npm audit --audit-level=high
+
+      - name: Inspect package contents
+        if: matrix.os == 'ubuntu-latest' && matrix.neovim == 'stable'
+        run: npm pack --dry-run

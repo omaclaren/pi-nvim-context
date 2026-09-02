@@ -11,6 +11,8 @@ An inline completion model such as GitHub Copilot can keep owning automatic Inse
 
 > **Status:** pre-1.0 preview. The core workflow is tested and in daily use, but configuration and protocol details may still change.
 
+![A Neovim visual selection transferred into Pi's editable input](https://raw.githubusercontent.com/omaclaren/pi-nvim-context/main/assets/pi-nvim-context-preview.webp)
+
 ## Features
 
 ### Context gathering

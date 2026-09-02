@@ -33,6 +33,7 @@
     "completion.ts",
     "CHANGELOG.md",
     "CHEATSHEET.md",
+    "assets/pi-nvim-context-preview.webp",
     "lua",
     "plugin",
     "README.md",
@@ -41,7 +42,8 @@
   "pi": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/omaclaren/pi-nvim-context/main/assets/pi-nvim-context-preview.webp"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

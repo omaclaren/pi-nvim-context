@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-label="A real Neovim visual selection transferred into the editable input of a standalone Pi session">
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#7dcfff"/>
+    </marker>
+    <style>
+      .label { font-family: "SF Mono", Menlo, Monaco, Consolas, monospace; }
+    </style>
+  </defs>
+
+  <image href="pi-nvim-context-context-raw.png" x="0" y="0" width="1600" height="900"/>
+
+  <rect x="536" y="188" width="174" height="52" rx="13" fill="#172536" fill-opacity="0.97" stroke="#7dcfff" stroke-width="2"/>
+  <text x="623" y="221" text-anchor="middle" class="label" font-size="20" font-weight="700" fill="#d6f0ff">Space p s</text>
+  <path d="M710 214 L767 214" fill="none" stroke="#7dcfff" stroke-width="3" stroke-linecap="round" marker-end="url(#arrowhead)"/>
+</svg>

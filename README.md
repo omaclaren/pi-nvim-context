@@ -1,11 +1,15 @@
 # pi-nvim-context
 
-Connect Neovim to a **standalone Pi session** for two deliberate workflows:
+[![CI](https://github.com/omaclaren/pi-nvim-context/actions/workflows/ci.yml/badge.svg)](https://github.com/omaclaren/pi-nvim-context/actions/workflows/ci.yml)
+
+Connect Neovim to a standalone [Pi coding agent](https://pi.dev) session for two deliberate workflows:
 
 1. Gather visible, editable context in Pi's input without submitting it.
 2. Ask the active Pi model for an explicit cursor completion, instruction-guided insertion, or selection rewrite without starting a Pi agent turn.
 
 An inline completion model such as GitHub Copilot can keep owning automatic Insert-mode completion and `Tab`; Pi is invoked only through explicit mappings.
+
+> **Status:** pre-1.0 preview. The core workflow is tested and in daily use, but configuration and protocol details may still change.
 
 ## Features
 
@@ -40,35 +44,64 @@ The Pi extension exposes a private Unix socket. On first use for each Neovim wor
 
 ## Installation
 
-This repository contains both halves of the bridge.
+This repository contains both halves of the bridge. Install it once as a Pi package and once as a Neovim plugin. The preview is installed from GitHub rather than npm.
 
-### Pi extension
+### 1. Pi extension
+
+Install from GitHub:
+
+```sh
+pi install git:github.com/omaclaren/pi-nvim-context
+```
+
+For development from a local checkout instead:
 
 ```sh
 pi install /absolute/path/to/pi-nvim-context
 ```
 
-Fully restart Pi after installing or updating the package. `/reload` is not enough when switching package sources.
+Run `pi list` to verify the source, then fully restart Pi. `/reload` is not enough after installing, updating, or switching package sources.
 
-### Neovim plugin
+### 2. Neovim plugin
 
-With Vim-Plug:
+With [lazy.nvim](https://github.com/folke/lazy.nvim):
+
+```lua
+{
+  "omaclaren/pi-nvim-context",
+  config = function()
+    require("pi-nvim-context").setup()
+  end,
+}
+```
+
+With [Vim-Plug](https://github.com/junegunn/vim-plug):
 
 ```vim
-Plug '/absolute/path/to/pi-nvim-context'
+Plug 'omaclaren/pi-nvim-context'
 ```
 
 Then configure it after `plug#end()`:
 
-```lua
-require("pi-nvim-context").setup()
+```vim
+lua require("pi-nvim-context").setup()
 ```
 
-Restart existing Neovim processes after changing the plugin or mappings.
+For local development, give the plugin manager the absolute checkout path instead. Restart existing Neovim processes after installing or changing the plugin.
+
+## First run
+
+1. Start an interactive Pi TUI from the project directory.
+2. Start Neovim with the same effective working directory; `:pwd` shows the value used for linking.
+3. Run `:PiContextPick` (default: `Space p p`) and confirm the exact-cwd Pi session.
+4. Run `:PiContextFile` (default: `Space p f`). The file reference should appear in Pi's editable input without being submitted.
+5. With Pi idle, run `:PiSuggest` to try a direct completion, or continue adding context before writing your question in Pi.
+
+Use `/nvim-context` in Pi and `:PiContextStatus` in Neovim to inspect both sides of the bridge.
 
 ## Default mappings
 
-For a compact one-page reference covering Pi context, direct edits, the system clipboard, and an optional Copilot setup as an example, see [CHEATSHEET.md](CHEATSHEET.md).
+For a compact reference covering Pi context, direct edits, and optional Copilot and clipboard examples, see [CHEATSHEET.md](CHEATSHEET.md).
 
 The mappings assume Space is already configured as `<leader>`.
 
@@ -91,7 +124,7 @@ The mappings assume Space is already configured as `<leader>`.
 | `Space p c` | Ask Pi for a completion after the Normal-mode cursor character |
 | `Space p g` | Enter an instruction and ask Pi to insert text at that position |
 | Visual `Space p r` | Enter an instruction and ask Pi to rewrite the selection |
-| Normal `Tab` | Accept while a Pi result is visible; otherwise retain normal Vim behavior |
+| Normal `Tab` | Accept while a Pi result is visible, when temporary Tab acceptance is enabled and available |
 | `Space p a` | Accept the visible Pi completion, insertion, or rewrite |
 | `Space p n` | Generate a materially different result |
 | `Space p v` | Focus a full preview so it can be scrolled; `q` returns to the source |
@@ -120,9 +153,9 @@ Corresponding commands are:
 
 ## Inline completion coexistence (Copilot example)
 
-No inline completion plugin is required. `pi-nvim-context` leaves Insert-mode `Tab` untouched, allowing a model-backed completion plugin such as GitHub Copilot to retain its normal acceptance mapping. While a Pi result is visible, the plugin temporarily installs a buffer-local **Normal-mode** `Tab` mapping; accepting or dismissing the result removes it.
+No inline completion plugin is required. `pi-nvim-context` leaves Insert-mode `Tab` untouched, allowing a model-backed completion plugin such as GitHub Copilot to retain its normal acceptance mapping. While a Pi result is visible, the plugin temporarily installs a buffer-local **Normal-mode** `Tab` mapping when that feature is enabled and the source buffer does not already own one; accepting or dismissing the result removes it.
 
-As an optional compatibility detail, direct Pi requests make a best-effort call to dismiss a visible `copilot.vim` suggestion so the previews do not overlap. Nothing happens when `copilot.vim` is absent.
+As an optional compatibility detail, direct Pi requests make a best-effort call to dismiss a visible `copilot.vim` suggestion, so the previews do not overlap. Nothing happens when `copilot.vim` is absent.
 
 A practical division of labour is:
 
@@ -146,7 +179,7 @@ Direct suggestions:
 - do not include other project files unless their text is already inside the bounded editor excerpt;
 - are discarded if the Neovim buffer changes while generation is running or while a result is visible.
 
-An `openai-codex/...` active model uses subscription-backed authentication. An `openai/...` model uses API-billed OpenAI Platform authentication.
+An `openai-codex/...` active model uses subscription-backed authentication. An `openai/...` model uses API-billed OpenAI Platform authentication. Other providers use their configured credentials and billing; direct suggestions can therefore incur model-provider charges.
 
 ## Explicit Pi linking
 
@@ -163,6 +196,27 @@ Use `Space p p` to open the explicit picker at any time. This picker includes ev
 Links are scoped per Neovim working directory. Changing directories switches to that directory's independent link and cancels any pending Pi editor suggestion; returning to a directory restores its remembered link. One directory's choice never overrides another's. `Space p i` shows the current Neovim directory, linked Pi name/cwd/PID, and the number of exact matches.
 
 A Pi process that was already running when this package was installed or updated is invisible until it fully restarts and loads the bridge. Suggestion commands also filter out older bridges that do not advertise suggestion support.
+
+## Updating and removing
+
+For a Git-installed Pi package, run `pi update --extensions`. Update the Neovim half through the same plugin manager used for installation—for example, `:Lazy update pi-nvim-context` or `:PlugUpdate pi-nvim-context`. Then fully restart both Pi and Neovim.
+
+For a local checkout, pull the repository yourself and restart both processes. To remove the Git-installed Pi half, run:
+
+```sh
+pi remove git:github.com/omaclaren/pi-nvim-context
+```
+
+Also remove the Neovim plugin specification and run the plugin manager's cleanup command.
+
+## Troubleshooting
+
+- **No bridge appears:** fully restart an interactive Pi TUI in the intended directory, then run `/nvim-context`. Print/RPC modes do not start the bridge.
+- **No exact-cwd session appears:** compare Pi's reported cwd with Neovim's `:pwd`. Run `:PiContextPick` only if a cross-directory link is intentional.
+- **A suggestion says Pi is busy:** wait for the current Pi agent turn to finish; direct suggestions run only while the linked session is idle.
+- **Model requests fail:** check `:messages`, the active Pi model, its authentication, and its provider billing. Context gathering does not require a model call.
+- **A result disappears:** changing the target buffer, text, or working directory invalidates stale work by design.
+- **An update seems absent:** update both installed halves and fully restart both processes; do not rely on Pi's `/reload` after a package-source change.
 
 ## Configuration
 
@@ -204,7 +258,7 @@ require("pi-nvim-context").setup({
 })
 ```
 
-Set an individual mapping to `false`, or set `keymaps = false` and map the Lua functions yourself. Set `accept_with_tab = false` to keep Normal-mode `Tab` untouched. If a source buffer already has its own buffer-local Normal `Tab` mapping, the plugin preserves it and `Space p a` remains available.
+Set an individual mapping to `false`, or set `keymaps = false` and map the Lua functions yourself. Set `accept_with_tab = false` to keep Normal-mode `Tab` untouched in both the source and preview buffers. If a source buffer already has its own buffer-local Normal `Tab` mapping, the plugin preserves it and `:PiSuggestAccept` remains available.
 
 ## Behavior and safety
 
@@ -216,6 +270,7 @@ Set an individual mapping to `false`, or set `keymaps = false` and map the Lua f
 - Request, context, selection, and response sizes are bounded.
 - Closing a request from Neovim aborts its in-flight model call.
 - Accepting a result calls `nvim_buf_set_text()` once and never writes the file.
+- Like any Pi extension or Neovim plugin, the installed code runs with your user account's permissions; review third-party code before installing it.
 
 ## Related work and inspirations
 
@@ -226,9 +281,10 @@ Set an individual mapping to `false`, or set `keymaps = false` and map the Lua f
 ## Development
 
 ```sh
-npm install
+npm ci
 npm run typecheck
 npm test
+npm pack --dry-run
 ```
 
 Tests cover the private socket lifecycle, completion, guided-insertion and rewrite requests, Pi-input isolation, stale-session cleanup, Unicode-safe Neovim ranges, full previews, temporary acceptance mappings, formatting, truncation, commands, and mappings.

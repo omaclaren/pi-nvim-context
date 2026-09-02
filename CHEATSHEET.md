@@ -1,6 +1,6 @@
 # Neovim + Pi cheat sheet (with an optional Copilot example)
 
-`<leader>` is **Space**. Pi does not require Copilot or another inline completion plugin. This example leaves automatic Insert-mode completion to Copilot while Pi handles deliberate requests.
+Examples below assume `<leader>` is **Space** and use the plugin's default mappings. Pi does not require Copilot or another inline completion plugin. This example leaves automatic Insert-mode completion to Copilot while Pi handles deliberate requests.
 
 ## Which tool should I use?
 
@@ -40,8 +40,8 @@ These call the active model directly without changing Pi's chat draft or session
 | Normal | `Space p c` | Request a completion **after** the cursor character |
 | Normal | `Space p g` | Enter an instruction and request an insertion there |
 | Visual | `Space p r` | Enter an instruction and request a selection rewrite |
-| Normal | `Tab` | Accept while a Pi result is visible |
-| Normal | `Space p a` | Alternative explicit accept mapping |
+| Normal | `Tab` | Accept while a Pi result is visible, when temporary Tab acceptance is enabled and available |
+| Normal | `Space p a` | Explicit accept mapping; always available by default |
 | Normal | `Space p n` | Generate a materially different result |
 | Normal | `Space p v` | Focus the full preview; scroll normally and press `q` to return |
 | Normal | `Space p x` | Cancel an active request or dismiss its result |
@@ -52,7 +52,7 @@ These call the active model directly without changing Pi's chat draft or session
 2. Put the cursor on the last character before the desired insertion.
 3. Press `Space p c`.
 4. Review the ghost text. Its highlighted first cell is the exact insertion boundary.
-5. Press Normal `Tab` to accept, or use `Space p n` / `Space p x`.
+5. Press Normal `Tab` to accept when available, or use `Space p a` / `Space p n` / `Space p x`.
 
 ### Guided-insertion recipe
 
@@ -60,7 +60,7 @@ These call the active model directly without changing Pi's chat draft or session
 2. Press `Space p g`.
 3. Enter an instruction such as `add references to Kuhn's book`.
 4. Review the result. Multiline or wide results get a wrapping full preview.
-5. Press Normal `Tab` to accept. Use `Space p v` first if you need to focus and scroll the preview.
+5. Press Normal `Tab` when available, or `Space p a`, to accept. Use `Space p v` first if you need to focus and scroll the preview.
 
 This direct request cannot search for or verify references. Supply exact bibliographic details when accuracy matters, or use the normal Pi agent for research.
 
@@ -70,7 +70,7 @@ This direct request cannot search for or verify references. Supply exact bibliog
 2. Press `Space p r`.
 3. Enter the rewrite instruction and press Enter.
 4. Review the wrapping diff preview; use `Space p v` to focus and scroll it.
-5. Press Normal `Tab` to accept, or use `Space p n` / `Space p x`.
+5. Press Normal `Tab` when available, or use `Space p a` / `Space p n` / `Space p x`.
 
 After acceptance, `u` undoes the complete Pi edit in one step and `Ctrl-R` redoes it. Nothing is saved until `:write`.
 
@@ -86,11 +86,16 @@ These mappings illustrate one complementary Copilot setup; `pi-nvim-context` doe
 | Insert | `Option-\` | Explicitly request a Copilot suggestion |
 | Normal | `Space c t` | Toggle Copilot globally |
 
-When `copilot.vim` is installed, starting a direct Pi request makes a best-effort attempt to dismiss its visible ghost text. Insert-mode `Tab` remains available to the inline completion plugin. A visible Pi result temporarily gives **Normal-mode** `Tab` to Pi; the mapping disappears when the result is accepted or dismissed.
+When `copilot.vim` is installed, starting a direct Pi request makes a best-effort attempt to dismiss its visible ghost text. Insert-mode `Tab` remains available to the inline completion plugin. When enabled and not already claimed by the source buffer, a visible Pi result temporarily gives **Normal-mode** `Tab` to Pi; the mapping disappears when the result is accepted or dismissed.
 
-## System clipboard
+## Optional system-clipboard example
 
-Normal Vim yanks and deletes still use ordinary Vim registers.
+These mappings are not installed by `pi-nvim-context`. Add them separately if you want ordinary Vim yanks and deletes to keep using normal registers while `<leader>y` writes explicitly to the system clipboard:
+
+```vim
+nnoremap <leader>y "+y
+xnoremap <leader>y "+y
+```
 
 | Mode | Mapping | Action |
 |---|---|---|
@@ -136,14 +141,14 @@ This shows whether that Pi session's bridge is active.
 - If the Neovim buffer or target changes while Pi is working, the result is cancelled or discarded.
 - Leaving the source buffer dismisses its pending request or preview.
 - Blockwise Visual rewrites are not supported; use characterwise or linewise selection.
-- `openai-codex/...` uses subscription-backed authentication. `openai/...` uses API-billed authentication.
+- `openai-codex/...` uses subscription-backed authentication. `openai/...` uses API-billed authentication; other providers use their configured billing.
 
 ## Troubleshooting
 
 1. Fully restart Pi with `pi --continue`; do not rely on `/reload` after updating the package.
 2. Restart Neovim so it loads the latest Lua plugin.
 3. In Pi, run `/nvim-context`.
-4. In Neovim, run `:PiContextStatus` or press `Space p i`.
-5. Press `Space p p` to inspect and explicitly choose among discovered Pi bridges.
+4. In Neovim, run `:PiContextStatus` (default: `Space p i`).
+5. Run `:PiContextPick` (default: `Space p p`) to inspect and explicitly choose among discovered Pi bridges.
 6. Check `:messages` for bridge or model errors.
 7. If using Copilot, check `:Copilot status` for Copilot problems.

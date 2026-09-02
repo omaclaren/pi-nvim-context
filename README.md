@@ -13,6 +13,8 @@ An inline completion model such as GitHub Copilot can keep owning automatic Inse
 
 ![A Neovim visual selection transferred into Pi's editable input](https://raw.githubusercontent.com/omaclaren/pi-nvim-context/main/assets/pi-nvim-context-preview.webp)
 
+_The preview uses Space as `<leader>`._
+
 ## Features
 
 ### Context gathering
@@ -99,10 +101,18 @@ For local development, give the plugin manager the absolute checkout path instea
 
 ## First run
 
+The plugin does not set `mapleader`. Its default mappings use `<leader>`; Vim and Neovim use backslash (`\`) unless your configuration changes it. To use Space, set the leader before calling `setup()`:
+
+```lua
+vim.g.mapleader = " "
+```
+
+With Vimscript, use `let mapleader = " "` instead.
+
 1. Start an interactive Pi TUI from the project directory.
 2. Start Neovim with the same effective working directory; `:pwd` shows the value used for linking.
-3. Run `:PiContextPick` (default: `Space p p`) and confirm the exact-cwd Pi session.
-4. Run `:PiContextFile` (default: `Space p f`). The file reference should appear in Pi's editable input without being submitted.
+3. Run `:PiContextPick` (default: `<leader>pp`) and confirm the exact-cwd Pi session.
+4. Run `:PiContextFile` (default: `<leader>pf`). The file reference should appear in Pi's editable input without being submitted.
 5. With Pi idle, run `:PiSuggest` to try a direct completion, or continue adding context before writing your question in Pi.
 
 Use `/nvim-context` in Pi and `:PiContextStatus` in Neovim to inspect both sides of the bridge.
@@ -111,34 +121,32 @@ Use `/nvim-context` in Pi and `:PiContextStatus` in Neovim to inspect both sides
 
 For a compact reference covering Pi context, direct edits, and optional Copilot and clipboard examples, see [CHEATSHEET.md](CHEATSHEET.md).
 
-The mappings assume Space is already configured as `<leader>`.
-
 ### Context
 
 | Mapping | Action |
 |---|---|
-| `Space p p` | Explicitly link the current Neovim cwd to a Pi session |
-| `Space p f` | Add the current file |
-| `Space p l` | Add the current file, cursor location, and current line |
-| Visual `Space p s` | Add the exact selection and its file/range |
-| `Space p d` | Add current-buffer diagnostics |
-| `Space p b` | Add the complete in-memory buffer |
-| `Space p i` | Show Neovim cwd, linked Pi, and bridge status |
+| `<leader>pp` | Explicitly link the current Neovim cwd to a Pi session |
+| `<leader>pf` | Add the current file |
+| `<leader>pl` | Add the current file, cursor location, and current line |
+| Visual `<leader>ps` | Add the exact selection and its file/range |
+| `<leader>pd` | Add current-buffer diagnostics |
+| `<leader>pb` | Add the complete in-memory buffer |
+| `<leader>pi` | Show Neovim cwd, linked Pi, and bridge status |
 
 ### Suggestions and edits
 
 | Mapping | Action |
 |---|---|
-| `Space p c` | Ask Pi for a completion after the Normal-mode cursor character |
-| `Space p g` | Enter an instruction and ask Pi to insert text at that position |
-| Visual `Space p r` | Enter an instruction and ask Pi to rewrite the selection |
+| `<leader>pc` | Ask Pi for a completion after the Normal-mode cursor character |
+| `<leader>pg` | Enter an instruction and ask Pi to insert text at that position |
+| Visual `<leader>pr` | Enter an instruction and ask Pi to rewrite the selection |
 | Normal `Tab` | Accept while a Pi result is visible, when temporary Tab acceptance is enabled and available |
-| `Space p a` | Accept the visible Pi completion, insertion, or rewrite |
-| `Space p n` | Generate a materially different result |
-| `Space p v` | Focus a full preview so it can be scrolled; `q` returns to the source |
-| `Space p x` | Cancel or dismiss the Pi request/result |
+| `<leader>pa` | Accept the visible Pi completion, insertion, or rewrite |
+| `<leader>pn` | Generate a materially different result |
+| `<leader>pv` | Focus a full preview so it can be scrolled; `q` returns to the source |
+| `<leader>px` | Cancel or dismiss the Pi request/result |
 
-Bare `Space p` is a harmless prefix mapping. If the sequence times out before a final key, Neovim no longer reinterprets it as native Normal-mode movement and paste commands.
+Bare `<leader>p` is a harmless prefix mapping. If the sequence times out before a final key, Neovim no longer reinterprets it as native movement and paste commands.
 
 Corresponding commands are:
 
@@ -199,9 +207,9 @@ On the first operation for a Neovim working directory:
 2. It always asks you to confirm which matching session to link, even when there is only one.
 3. If there is no exact match, it sends nothing and explains that Pi may need restarting in that directory.
 
-Use `Space p p` to open the explicit picker at any time. This picker includes every discovered bridge, puts exact matches first, and labels different-directory sessions with a warning. Choosing one there is the deliberate cross-directory override.
+Use `<leader>pp` to open the explicit picker at any time. This picker includes every discovered bridge, puts exact matches first, and labels different-directory sessions with a warning. Choosing one there is the deliberate cross-directory override.
 
-Links are scoped per Neovim working directory. Changing directories switches to that directory's independent link and cancels any pending Pi editor suggestion; returning to a directory restores its remembered link. One directory's choice never overrides another's. `Space p i` shows the current Neovim directory, linked Pi name/cwd/PID, and the number of exact matches.
+Links are scoped per Neovim working directory. Changing directories switches to that directory's independent link and cancels any pending Pi editor suggestion; returning to a directory restores its remembered link. One directory's choice never overrides another's. `<leader>pi` shows the current Neovim directory, linked Pi name/cwd/PID, and the number of exact matches.
 
 A Pi process that was already running when this package was installed or updated is invisible until it fully restarts and loads the bridge. Suggestion commands also filter out older bridges that do not advertise suggestion support.
 

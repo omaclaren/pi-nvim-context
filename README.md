@@ -44,11 +44,17 @@ The Pi extension exposes a private Unix socket. On first use for each Neovim wor
 
 ## Installation
 
-This repository contains both halves of the bridge. Install it once as a Pi package and once as a Neovim plugin. The preview is installed from GitHub rather than npm.
+This repository contains both halves of the bridge. Install it once as a Pi package and once as a Neovim plugin; neither installation automatically supplies the other half.
 
 ### 1. Pi extension
 
-Install from GitHub:
+Install the published Pi package from npm:
+
+```sh
+pi install npm:pi-nvim-context
+```
+
+Alternatively, install the current GitHub branch:
 
 ```sh
 pi install git:github.com/omaclaren/pi-nvim-context
@@ -199,11 +205,13 @@ A Pi process that was already running when this package was installed or updated
 
 ## Updating and removing
 
-For a Git-installed Pi package, run `pi update --extensions`. Update the Neovim half through the same plugin manager used for installation—for example, `:Lazy update pi-nvim-context` or `:PlugUpdate pi-nvim-context`. Then fully restart both Pi and Neovim.
+Update an npm-installed Pi package with `pi update npm:pi-nvim-context`; for a Git-installed package, use `pi update --extensions`. Update the Neovim half through the same plugin manager used for installation—for example, `:Lazy update pi-nvim-context` or `:PlugUpdate pi-nvim-context`. Then fully restart both Pi and Neovim.
 
-For a local checkout, pull the repository yourself and restart both processes. To remove the Git-installed Pi half, run:
+For a local checkout, pull the repository yourself and restart both processes. Remove the Pi half using the same source type used to install it:
 
 ```sh
+pi remove npm:pi-nvim-context
+# or
 pi remove git:github.com/omaclaren/pi-nvim-context
 ```
 
@@ -277,6 +285,10 @@ Set an individual mapping to `false`, or set `keymaps = false` and map the Lua f
 - [pi-nvim](https://github.com/carderne/pi-nvim)
 - [pi-ide-context](https://github.com/Andy8647/pi-ide-context)
 - [sidekick.nvim](https://github.com/folke/sidekick.nvim)
+
+## Release history
+
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## Development
 

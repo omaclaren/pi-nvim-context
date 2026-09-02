@@ -38,6 +38,7 @@ body:
     attributes:
       label: Installation source
       options:
+        - npm through `pi install`
         - GitHub through `pi install`
         - Local checkout
         - Other

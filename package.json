@@ -3,7 +3,6 @@
   "version": "0.3.0",
   "description": "Bridge Neovim to standalone Pi sessions for accumulated context and explicit model-powered editor suggestions",
   "type": "module",
-  "private": true,
   "license": "MIT",
   "author": "Oliver Maclaren",
   "repository": {
@@ -13,6 +12,9 @@
   "homepage": "https://github.com/omaclaren/pi-nvim-context#readme",
   "bugs": {
     "url": "https://github.com/omaclaren/pi-nvim-context/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "engines": {
     "node": ">=22.19.0"
@@ -29,6 +31,7 @@
   "files": [
     "index.ts",
     "completion.ts",
+    "CHANGELOG.md",
     "CHEATSHEET.md",
     "lua",
     "plugin",

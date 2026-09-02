@@ -562,7 +562,7 @@ export function registerPiNvimContext(pi: ExtensionAPI, dependencies: ExtensionD
 					`Pi working directory: ${runtime.ctx.cwd}`,
 					"Capabilities: chat-context prefill, completion, rewrite",
 					`Private bridge directory: ${basename(dirname(runtime.socketPath))}`,
-					"Use Space p p in Neovim to link this session explicitly.",
+					"Run :PiContextPick in Neovim to link this session explicitly.",
 				].join("\n"),
 				"info",
 			);

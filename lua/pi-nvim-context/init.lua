@@ -449,14 +449,14 @@ local function choose_session(force_picker, callback, capability)
         notify(
           "No bridge-enabled Pi session with " .. feature .. " support matches this Neovim working directory:\n"
             .. requested_scope
-            .. "\nRestart Pi there after updating pi-nvim-context, or use Space p p to explicitly link a different session.",
+            .. "\nRestart Pi there after updating pi-nvim-context, or run :PiContextPick to explicitly link a different session.",
           vim.log.levels.WARN
         )
       else
         notify(
           "No bridge-enabled Pi session matches this Neovim working directory:\n"
             .. requested_scope
-            .. "\nRestart Pi in that directory, or use Space p p to explicitly link a different-directory session.",
+            .. "\nRestart Pi in that directory, or run :PiContextPick to explicitly link a different-directory session.",
           vim.log.levels.WARN
         )
       end
@@ -848,7 +848,7 @@ function M.add_file()
     return
   end
   if vim.api.nvim_buf_get_name(bufnr) == "" then
-    notify("Save the buffer first, or use <leader>pb to send its contents", vim.log.levels.WARN)
+    notify("Save the buffer first, or run :PiContextBuffer to send its contents", vim.log.levels.WARN)
     return
   end
   with_selected_formatter(format_file, "current file")
@@ -953,7 +953,7 @@ function M.status()
           notify(
             "The Pi session linked for this Neovim working directory is no longer available:\n"
               .. cwd
-              .. "\nUse Space p p to link again.",
+              .. "\nRun :PiContextPick to link again.",
             vim.log.levels.WARN
           )
         end
@@ -978,7 +978,7 @@ function M.status()
   notify(
     "This Neovim working directory is not linked to Pi:\n"
       .. cwd
-      .. string.format("\n%d bridge(s) discovered; %d exact cwd match(es)\nUse Space p p to link explicitly.", #sessions, exact_count)
+      .. string.format("\n%d bridge(s) discovered; %d exact cwd match(es)\nRun :PiContextPick to link explicitly.", #sessions, exact_count)
   )
 end
 
@@ -1079,7 +1079,7 @@ local function register_link_autocommands()
             .. tostring(previous_scope)
             .. "\n→ "
             .. current_scope
-            .. "\nThis directory is not linked to Pi. Use Space p p to link it."
+            .. "\nThis directory is not linked to Pi. Run :PiContextPick to link it."
         )
       end
     end,

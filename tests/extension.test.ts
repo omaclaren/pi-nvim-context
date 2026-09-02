@@ -179,7 +179,7 @@ test("Pi bridge exposes a private socket and prefills without submitting", async
 		};
 		await statusCommand.handler("", mock.context);
 		assert.match(mock.notifications.at(-1)?.message ?? "", /Pi working directory: \/tmp\/pi-nvim-context-project/);
-		assert.match(mock.notifications.at(-1)?.message ?? "", /Use Space p p in Neovim to link this session explicitly/);
+		assert.match(mock.notifications.at(-1)?.message ?? "", /Run :PiContextPick in Neovim to link this session explicitly/);
 
 		const ping = await request(manifest.socketPath, {
 			protocol: PROTOCOL_VERSION,

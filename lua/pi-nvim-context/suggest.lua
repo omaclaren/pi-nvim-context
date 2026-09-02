@@ -281,13 +281,13 @@ end
 
 local function install_source_tab_mapping(bufnr)
   if cfg().accept_with_tab == false or not vim.api.nvim_buf_is_valid(bufnr) then
-    return
+    return false
   end
   local ok, existing = pcall(vim.api.nvim_buf_call, bufnr, function()
     return vim.fn.maparg("<Tab>", "n", false, true)
   end)
   if ok and type(existing) == "table" and existing.buffer == 1 then
-    return
+    return false
   end
   vim.keymap.set("n", "<Tab>", function()
     S.accept()
@@ -298,6 +298,7 @@ local function install_source_tab_mapping(bufnr)
     desc = SOURCE_TAB_DESC,
   })
   source_tab_buf = bufnr
+  return true
 end
 
 local function close_preview_window()
@@ -380,9 +381,11 @@ local function open_preview_window(state, lines, options)
   vim.bo[preview_buf].filetype = options.filetype or ""
   vim.bo[preview_buf].modifiable = false
 
-  local title = string.format(" Pi %s · Space p v to inspect · Tab to accept ", options.label)
+  local tab_enabled = cfg().accept_with_tab ~= false
+  local accept_hint = tab_enabled and "Tab to accept" or ":PiSuggestAccept to accept"
+  local title = string.format(" Pi %s · :PiSuggestPreview to focus · %s ", options.label, accept_hint)
   if vim.fn.strdisplaywidth(title) > width then
-    title = " Pi preview · Tab accept "
+    title = tab_enabled and " Pi preview · Tab accept " or " Pi preview · :PiSuggestAccept "
   end
   local ok, win = pcall(vim.api.nvim_open_win, preview_buf, false, {
     relative = "editor",
@@ -412,9 +415,11 @@ local function open_preview_window(state, lines, options)
   vim.wo[preview_win].number = false
   vim.wo[preview_win].relativenumber = false
 
-  vim.keymap.set("n", "<Tab>", function()
-    S.accept()
-  end, { buffer = preview_buf, silent = true, nowait = true, desc = SOURCE_TAB_DESC })
+  if tab_enabled then
+    vim.keymap.set("n", "<Tab>", function()
+      S.accept()
+    end, { buffer = preview_buf, silent = true, nowait = true, desc = SOURCE_TAB_DESC })
+  end
   vim.keymap.set("n", "j", "gj", {
     buffer = preview_buf,
     silent = true,
@@ -565,19 +570,23 @@ end
 local function render_preview(state)
   clear_preview_ui(state.base.bufnr)
   dismiss_copilot()
+  local source_tab_accepts = install_source_tab_mapping(state.base.bufnr)
   local has_window
   if state.base.kind == "rewrite" then
     has_window = render_rewrite(state)
   else
     has_window = render_completion(state)
   end
-  install_source_tab_mapping(state.base.bufnr)
+  local accept_hint = source_tab_accepts
+      and "Use Normal Tab or :PiSuggestAccept to accept"
+    or "Use :PiSuggestAccept to accept"
   notify(string.format(
-    "Pi %s ready (%s, thinking %s). Use Normal Tab or Space p a to accept, Space p n for another, or Space p x to dismiss.%s",
+    "Pi %s ready (%s, thinking %s). %s; run :PiSuggestAgain for another or :PiSuggestDismiss to dismiss.%s",
     suggestion_kind_label(state.base.kind),
     state.model_label,
     state.thinking,
-    has_window and " Space p v opens the full scrollable preview." or ""
+    accept_hint,
+    has_window and " :PiSuggestPreview opens the full scrollable preview." or ""
   ))
 end
 
@@ -598,7 +607,8 @@ function S.focus_preview()
     notify("The Pi suggestion preview is no longer available", vim.log.levels.WARN, true)
     return
   end
-  notify("Pi preview focused. Scroll normally; press Tab to accept or q to return to the source.")
+  local accept_hint = cfg().accept_with_tab ~= false and "press Tab or run :PiSuggestAccept" or "run :PiSuggestAccept"
+  notify("Pi preview focused. Scroll normally; " .. accept_hint .. " to accept, or press q to return to the source.")
 end
 
 local function replace_target(target, suggestion)

@@ -365,6 +365,35 @@ equal(vim.api.nvim_win_is_valid(wide_ui.preview_win), true, "wide single-line su
 equal(vim.api.nvim_buf_get_lines(wide_ui.preview_buf, 0, -1, false)[1], string.rep("long suggestion text ", 20), "wide previews retain unclipped text")
 suggest_module.dismiss()
 
+vim.api.nvim_buf_set_lines(edit_buf, 0, -1, false, { "Existing Tab" })
+vim.api.nvim_win_set_cursor(0, { 1, #"Existing Tab" - 1 })
+vim.keymap.set("n", "<Tab>", "<Nop>", { buffer = edit_buf, desc = "Existing buffer Tab" })
+suggest_module.suggest()
+equal(vim.wait(1000, function()
+  return #sent_requests == 5 and suggest_module._test.get_state().preview ~= nil
+end, 10), true, "suggestions still render when the source buffer owns Normal Tab")
+local existing_tab = vim.fn.maparg("<Tab>", "n", false, true)
+equal(existing_tab.desc, "Existing buffer Tab", "Pi preserves an existing buffer-local Normal Tab mapping")
+suggest_module.dismiss()
+equal(vim.fn.maparg("<Tab>", "n", false, true).desc, "Existing buffer Tab", "dismissing Pi leaves the existing Tab mapping intact")
+vim.keymap.del("n", "<Tab>", { buffer = edit_buf })
+
+suggestion_config.accept_with_tab = false
+vim.api.nvim_buf_set_lines(edit_buf, 0, -1, false, { "Wide preview" })
+vim.api.nvim_win_set_cursor(0, { 1, #"Wide preview" - 1 })
+suggest_module.suggest()
+equal(vim.wait(1000, function()
+  return #sent_requests == 6 and suggest_module._test.get_state().preview ~= nil
+end, 10), true, "suggestions render when Tab acceptance is disabled")
+local no_tab_ui = suggest_module._test.get_ui_state()
+equal(vim.fn.maparg("<Tab>", "n"), "", "disabling Tab acceptance leaves the source mapping untouched")
+local preview_tab = vim.api.nvim_buf_call(no_tab_ui.preview_buf, function()
+  return vim.fn.maparg("<Tab>", "n")
+end)
+equal(preview_tab, "", "disabling Tab acceptance also leaves the preview-buffer mapping untouched")
+suggest_module.dismiss()
+suggestion_config.accept_with_tab = true
+
 local rewrite_input_callback
 local original_ui_input = vim.ui.input
 local original_rewrite_notify = vim.notify

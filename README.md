@@ -148,6 +148,8 @@ For a compact reference covering Pi context, direct edits, and optional Copilot 
 | `<leader>pv` | Focus a full preview so it can be scrolled; `q` returns to the source |
 | `<leader>px` | Cancel or dismiss the Pi request/result |
 
+`<leader>pp` is also available while a Visual selection is active, so opening the Pi picker cannot fall through to native Visual-mode paste. Enabled Normal-only mappings within the configured Pi prefix are also intercepted in Visual mode with a warning rather than passing their final key to a native Visual command. A pre-existing exact Visual mapping is preserved, and custom Normal mappings outside the Pi prefix remain Normal-only.
+
 Corresponding commands are:
 
 ```text

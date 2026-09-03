@@ -178,11 +178,96 @@ equal(vim.fn.exists(":PiRewrite"), 2, "setup registers Pi rewrite commands")
 equal(vim.fn.maparg("<F5>", "n"), "<Nop>", "setup protects an incomplete Pi mapping prefix")
 equal(vim.fn.maparg("<F5>", "x"), "<Nop>", "visual-mode Pi prefixes are protected too")
 equal(vim.fn.maparg("<F6>", "n") ~= "", true, "setup registers normal mappings")
+equal(vim.fn.maparg("<F6>", "x") ~= "", true, "the Pi picker is also available from Visual mode")
 equal(vim.fn.maparg("<F7>", "x") ~= "", true, "setup registers visual mappings")
 equal(vim.fn.maparg("<F8>", "n") ~= "", true, "setup registers cursor-suggestion mappings")
+equal(
+  vim.fn.maparg("<F8>", "x"),
+  "",
+  "custom Normal mappings outside the configured Pi prefix do not claim Visual keys"
+)
 equal(vim.fn.maparg("<F9>", "x") ~= "", true, "setup registers rewrite mappings")
 equal(vim.fn.maparg("<F10>", "n") ~= "", true, "setup registers guided-insertion mappings")
+equal(
+  vim.fn.maparg("<F10>", "x"),
+  "",
+  "custom guided-insertion mappings outside the Pi prefix remain Normal-only"
+)
 equal(vim.fn.maparg("<F11>", "n") ~= "", true, "setup registers full-preview mappings")
+equal(
+  vim.fn.maparg("<F11>", "x"),
+  "",
+  "custom preview mappings outside the Pi prefix remain Normal-only"
+)
+
+local mapping_runtime = temp .. "/mapping-runtime"
+vim.fn.mkdir(mapping_runtime, "p")
+assert((vim.uv or vim.loop).fs_chmod(mapping_runtime, 0x1c0))
+local mapping_runtime_override = vim.env.PI_NVIM_CONTEXT_RUNTIME_DIR
+vim.env.PI_NVIM_CONTEXT_RUNTIME_DIR = mapping_runtime
+vim.keymap.set("x", "<Space>pd", "<Nop>", { desc = "Existing Visual mapping" })
+context.setup({
+  notify = false,
+  keymaps = {
+    prefix = "<Space>p",
+    pick = "<Space>pp",
+    file = false,
+    location = false,
+    selection = false,
+    diagnostics = "<Space>pd",
+    buffer = false,
+    status = false,
+    suggest = false,
+    guided = false,
+    rewrite = false,
+    accept = false,
+    again = false,
+    dismiss = "<Space>px",
+    preview = false,
+  },
+})
+matches(
+  vim.fn.maparg("<Space>px", "x", false, true).desc,
+  "Normal mode only",
+  "Normal-only mappings within the Pi prefix are guarded in Visual mode"
+)
+equal(
+  vim.fn.maparg("<Space>pd", "x", false, true).desc,
+  "Existing Visual mapping",
+  "Visual guards preserve an existing exact Visual mapping"
+)
+local mapping_buf = vim.api.nvim_create_buf(true, false)
+vim.api.nvim_set_current_buf(mapping_buf)
+vim.api.nvim_buf_set_lines(mapping_buf, 0, -1, false, { "alpha beta" })
+vim.fn.setreg(string.char(34), "VISUAL PICKER REGISTER")
+local mapping_notify = vim.notify
+vim.notify = function() end
+vim.cmd("normal! 0v4l")
+vim.fn.feedkeys(" pp", "xt")
+equal(vim.api.nvim_get_current_line(), "alpha beta", "Visual Space-p-p does not paste over the selection")
+equal(
+  vim.fn.getreg(string.char(34)),
+  "VISUAL PICKER REGISTER",
+  "Visual Space-p-p leaves the unnamed register unchanged"
+)
+equal(vim.fn.mode(1), "v", "the Pi picker mapping preserves the active Visual selection")
+vim.cmd("normal! \027")
+vim.cmd("normal! 0v4l")
+vim.fn.feedkeys(" px", "xt")
+equal(vim.api.nvim_get_current_line(), "alpha beta", "Normal-only Pi mappings cannot run native Visual commands")
+equal(
+  vim.fn.getreg(string.char(34)),
+  "VISUAL PICKER REGISTER",
+  "guarded Visual Pi mappings leave the unnamed register unchanged"
+)
+equal(vim.fn.mode(1), "v", "a guarded Pi mapping preserves the active Visual selection")
+vim.notify = mapping_notify
+vim.cmd("normal! \027")
+vim.api.nvim_set_current_buf(bufnr)
+vim.api.nvim_buf_delete(mapping_buf, { force = true })
+vim.keymap.del("x", "<Space>pd")
+vim.env.PI_NVIM_CONTEXT_RUNTIME_DIR = mapping_runtime_override
+
 test.set_selected_session(exact_session, original_cwd)
 local original_notify = vim.notify
 vim.notify = function() end

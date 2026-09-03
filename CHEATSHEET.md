@@ -24,10 +24,12 @@ These mappings append visible, editable text to the explicitly linked standalone
 | Visual | `<leader>ps` | Add the exact selection and its file/range |
 | Normal | `<leader>pd` | Add current-buffer diagnostics |
 | Normal | `<leader>pb` | Add the complete in-memory buffer, including unsaved edits |
-| Normal | `<leader>pp` | Explicitly link or change the target Pi session |
+| Normal or Visual | `<leader>pp` | Explicitly link or change the target Pi session |
 | Normal | `<leader>pi` | Show Neovim cwd, linked Pi cwd/PID, and bridge status |
 
 Repeated additions accumulate in Pi's input. Switch to Pi, type the question after the gathered context, and press Enter normally.
+
+Visual `<leader>pp` opens the picker without falling through to native Visual-mode `p`, so it cannot paste over the active selection. Other enabled Pi mappings listed as Normal-only are intercepted in Visual mode with a warning rather than passing their final key to a native Visual command.
 
 On the first operation, Neovim always asks you to confirm an exact-cwd Pi link. It never silently falls back to another directory. If no exact bridge exists, restart Pi in that directory or use `<leader>pp` for a deliberate cross-directory link. Each Neovim cwd keeps an independent remembered link; switching cwd switches links and cancels any pending suggestion.
 

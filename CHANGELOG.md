@@ -2,6 +2,12 @@
 
 Notable changes to `pi-nvim-context` are recorded here.
 
+## [Unreleased]
+
+### Fixed
+
+- Make the explicit Pi picker available in Visual mode and prevent other enabled prefix-based Normal mappings from falling through to native Visual commands without overriding unrelated custom mappings.
+
 ## [0.3.1] - 2026-09-03
 
 Documentation-only patch.
@@ -25,5 +31,6 @@ Initial public preview.
 - Private same-host Unix-socket discovery with bounded payloads, ownership and permission checks, stale-process cleanup, and request cancellation.
 - Neovim 0.11 and current-stable CI coverage on Linux and macOS.
 
+[Unreleased]: https://github.com/omaclaren/pi-nvim-context/compare/v0.3.1...HEAD
 [0.3.1]: https://github.com/omaclaren/pi-nvim-context/releases/tag/v0.3.1
 [0.3.0]: https://github.com/omaclaren/pi-nvim-context/releases/tag/v0.3.0

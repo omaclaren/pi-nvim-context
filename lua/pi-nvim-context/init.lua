@@ -1014,6 +1014,24 @@ local function register_keymaps()
     return
   end
   local keymaps = config.keymaps or {}
+  local function mapping_extends_prefix(lhs)
+    local prefix = keymaps.prefix
+    if type(lhs) ~= "string" or type(prefix) ~= "string" or prefix == "" then
+      return false
+    end
+    local leader = type(vim.g.mapleader) == "string" and vim.g.mapleader or "\\"
+    local function expand(value)
+      local with_leader = value:gsub("<[Ll][Ee][Aa][Dd][Ee][Rr]>", function()
+        return leader
+      end)
+      return vim.api.nvim_replace_termcodes(with_leader, true, true, true)
+    end
+    local expanded_lhs = expand(lhs)
+    local expanded_prefix = expand(prefix)
+    return #expanded_lhs > #expanded_prefix
+      and expanded_lhs:sub(1, #expanded_prefix) == expanded_prefix
+  end
+
   if keymaps.prefix and keymaps.prefix ~= false then
     vim.keymap.set({ "n", "x" }, keymaps.prefix, "<Nop>", {
       silent = true,
@@ -1034,10 +1052,30 @@ local function register_keymaps()
     dismiss = { M.dismiss_suggestion, "Dismiss Pi editor suggestion" },
     preview = { M.focus_suggestion_preview, "Focus full Pi suggestion preview" },
   }
+  local function visual_mode_guard(lhs)
+    return function()
+      notify(
+        "Pi mapping " .. lhs .. " is available only in Normal mode; press <Esc> first.",
+        vim.log.levels.WARN
+      )
+    end
+  end
+
   for name, mapping in pairs(normal) do
     local lhs = keymaps[name]
     if lhs and lhs ~= false then
       vim.keymap.set("n", lhs, mapping[1], { silent = true, desc = mapping[2] })
+      if name == "pick" then
+        vim.keymap.set("x", lhs, mapping[1], { silent = true, desc = mapping[2] })
+      elseif mapping_extends_prefix(lhs) then
+        local existing = vim.fn.maparg(lhs, "x", false, true)
+        if type(existing) ~= "table" or vim.tbl_isempty(existing) then
+          vim.keymap.set("x", lhs, visual_mode_guard(lhs), {
+            silent = true,
+            desc = mapping[2] .. " (Normal mode only)",
+          })
+        end
+      end
     end
   end
   if keymaps.selection and keymaps.selection ~= false then

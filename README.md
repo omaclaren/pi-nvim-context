@@ -7,6 +7,8 @@ Connect Neovim to a standalone [Pi coding agent](https://pi.dev) session for two
 1. Gather visible, editable context in Pi's input without submitting it.
 2. Ask the active Pi model for an explicit cursor completion, instruction-guided insertion, or selection rewrite without starting a Pi agent turn.
 
+Unlike bridges that immediately submit editor context as a Pi turn or manage files automatically, `pi-nvim-context` keeps gathered context in Pi's editable draft until you submit it. Its separate completion and rewrite commands do not alter Pi's conversation history, and it never automatically saves or reloads buffers.
+
 An inline completion model such as GitHub Copilot can keep owning automatic Insert-mode completion and `Tab`; Pi is invoked only through explicit mappings.
 
 > **Status:** pre-1.0 preview. The core workflow is tested and in daily use, but configuration and protocol details may still change.
@@ -146,8 +148,6 @@ For a compact reference covering Pi context, direct edits, and optional Copilot 
 | `<leader>pv` | Focus a full preview so it can be scrolled; `q` returns to the source |
 | `<leader>px` | Cancel or dismiss the Pi request/result |
 
-Bare `<leader>p` is a harmless prefix mapping. If the sequence times out before a final key, Neovim no longer reinterprets it as native movement and paste commands.
-
 Corresponding commands are:
 
 ```text
@@ -257,7 +257,7 @@ require("pi-nvim-context").setup({
   accept_with_tab = true,
 
   keymaps = {
-    prefix = "<leader>p", -- harmless exact mapping protects an incomplete prefix
+    prefix = "<leader>p",
     pick = "<leader>pp",
     file = "<leader>pf",
     location = "<leader>pl",
@@ -292,7 +292,8 @@ Set an individual mapping to `false`, or set `keymaps = false` and map the Lua f
 
 ## Related work and inspirations
 
-- [pi-nvim](https://github.com/carderne/pi-nvim)
+- [carderne/pi-nvim](https://github.com/carderne/pi-nvim)
+- [maxpaulus43/pi-nvim](https://github.com/maxpaulus43/pi-nvim)
 - [pi-ide-context](https://github.com/Andy8647/pi-ide-context)
 - [sidekick.nvim](https://github.com/folke/sidekick.nvim)
 

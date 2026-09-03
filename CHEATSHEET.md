@@ -29,7 +29,7 @@ These mappings append visible, editable text to the explicitly linked standalone
 
 Repeated additions accumulate in Pi's input. Switch to Pi, type the question after the gathered context, and press Enter normally.
 
-On the first operation, Neovim always asks you to confirm an exact-cwd Pi link. It never silently falls back to another directory. If no exact bridge exists, restart Pi in that directory or use `<leader>pp` for a deliberate cross-directory link. Each Neovim cwd keeps an independent remembered link; switching cwd switches links and cancels any pending suggestion. Bare `<leader>p` is protected: if you pause until the mapping times out, it does nothing instead of becoming native movement plus paste.
+On the first operation, Neovim always asks you to confirm an exact-cwd Pi link. It never silently falls back to another directory. If no exact bridge exists, restart Pi in that directory or use `<leader>pp` for a deliberate cross-directory link. Each Neovim cwd keeps an independent remembered link; switching cwd switches links and cancels any pending suggestion.
 
 ## Direct Pi completions, insertions, and rewrites
 

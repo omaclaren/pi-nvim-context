@@ -2,7 +2,9 @@
 
 Notable changes to `pi-nvim-context` are recorded here.
 
-## [Unreleased]
+## [0.3.2] - 2026-09-03
+
+Visual-mode mapping safety patch.
 
 ### Fixed
 
@@ -31,6 +33,6 @@ Initial public preview.
 - Private same-host Unix-socket discovery with bounded payloads, ownership and permission checks, stale-process cleanup, and request cancellation.
 - Neovim 0.11 and current-stable CI coverage on Linux and macOS.
 
-[Unreleased]: https://github.com/omaclaren/pi-nvim-context/compare/v0.3.1...HEAD
+[0.3.2]: https://github.com/omaclaren/pi-nvim-context/releases/tag/v0.3.2
 [0.3.1]: https://github.com/omaclaren/pi-nvim-context/releases/tag/v0.3.1
 [0.3.0]: https://github.com/omaclaren/pi-nvim-context/releases/tag/v0.3.0
